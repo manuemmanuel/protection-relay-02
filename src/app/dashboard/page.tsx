@@ -106,6 +106,8 @@ interface RealTimeData {
   temperature: number
 }
 
+interface OutputRealTimeData extends RealTimeData {} // Same structure as RealTimeData
+
 // Add new interfaces for the panels
 interface RelayStatus {
   status: 'healthy' | 'fault' | 'tripped';
@@ -139,7 +141,8 @@ export default function Dashboard() {
   const router = useRouter()
   const supabase = createClientComponentClient()
   const [user, setUser] = useState<User | null>(null)
-  const [realTimeData, setRealTimeData] = useState<RealTimeData | null>(null)
+  const [inputData, setInputData] = useState<RealTimeData | null>(null)
+  const [outputData, setOutputData] = useState<OutputRealTimeData | null>(null)
   const [relayStatus, setRelayStatus] = useState<RelayStatus>({
     status: 'healthy',
     configuration: selectedConfig,
@@ -165,31 +168,55 @@ export default function Dashboard() {
 
   useEffect(() => {
     const fetchRealTimeData = async () => {
-      const { data, error } = await supabase
+      // Fetch input data
+      const { data: inputData, error: inputError } = await supabase
         .from('real_time_data')
         .select('*')
         .order('computer_ts', { ascending: false })
         .limit(1)
         .single()
 
-      if (error) {
-        console.error('Error fetching real-time data:', error)
-        return
+      if (inputError) {
+        console.error('Error fetching input real-time data:', inputError)
+      } else {
+        setInputData(inputData)
       }
 
-      setRealTimeData(data)
+      // Fetch output data
+      const { data: outputData, error: outputError } = await supabase
+        .from('output_real_time_data')
+        .select('*')
+        .order('computer_ts', { ascending: false })
+        .limit(1)
+        .single()
+
+      if (outputError) {
+        console.error('Error fetching output real-time data:', outputError)
+      } else {
+        setOutputData(outputData)
+      }
     }
 
     // Initial fetch
     fetchRealTimeData()
 
-    // Set up real-time subscription
-    const subscription = supabase
-      .channel('real_time_data_changes')
+    // Set up real-time subscriptions
+    const inputSubscription = supabase
+      .channel('input_data_changes')
       .on('postgres_changes', 
         { event: 'INSERT', schema: 'public', table: 'real_time_data' },
         (payload) => {
-          setRealTimeData(payload.new as RealTimeData)
+          setInputData(payload.new as RealTimeData)
+        }
+      )
+      .subscribe()
+
+    const outputSubscription = supabase
+      .channel('output_data_changes')
+      .on('postgres_changes', 
+        { event: 'INSERT', schema: 'public', table: 'output_real_time_data' },
+        (payload) => {
+          setOutputData(payload.new as OutputRealTimeData)
         }
       )
       .subscribe()
@@ -198,7 +225,8 @@ export default function Dashboard() {
     const interval = setInterval(fetchRealTimeData, 5000)
 
     return () => {
-      subscription.unsubscribe()
+      inputSubscription.unsubscribe()
+      outputSubscription.unsubscribe()
       clearInterval(interval)
     }
   }, [supabase])
@@ -409,53 +437,53 @@ export default function Dashboard() {
                 <div className="flex justify-between items-center p-3 bg-gray-800/40 rounded-lg border border-gray-800/50">
                   <span className="text-gray-400">Active Energy:</span>
                   <span className="text-gray-100 font-mono bg-gray-800/80 px-4 py-1.5 rounded-lg">
-                    {(realTimeData?.a_phase_active_power ?? 0).toFixed(2)} kWh
+                    {(inputData?.a_phase_active_power ?? 0).toFixed(2)} kWh
                   </span>
                 </div>
                 <div className="flex justify-between items-center p-3 bg-gray-800/40 rounded-lg border border-gray-800/50">
                   <span className="text-gray-400">Reactive Energy:</span>
                   <span className="text-gray-100 font-mono bg-gray-800/80 px-4 py-1.5 rounded-lg">
-                    {(realTimeData?.a_phase_reactive_power ?? 0).toFixed(2)} kVARh
+                    {(inputData?.a_phase_reactive_power ?? 0).toFixed(2)} kVARh
                   </span>
                 </div>
                 <div className="flex justify-between items-center p-3 bg-gray-800/40 rounded-lg border border-gray-800/50">
                   <span className="text-gray-400">Apparent Power:</span>
                   <span className="text-gray-100 font-mono bg-gray-800/80 px-4 py-1.5 rounded-lg">
-                    {(realTimeData?.a_phase_apparent_power ?? 0).toFixed(2)} kVA
+                    {(inputData?.a_phase_apparent_power ?? 0).toFixed(2)} kVA
                   </span>
                 </div>
                 <div className="flex justify-between items-center p-3 bg-gray-800/40 rounded-lg border border-gray-800/50">
                   <span className="text-gray-400">Power Factor:</span>
                   <span className="text-gray-100 font-mono bg-gray-800/80 px-4 py-1.5 rounded-lg">
-                    {(realTimeData?.a_power_factor ?? 0).toFixed(2)}
+                    {(inputData?.a_power_factor ?? 0).toFixed(2)}
                   </span>
                 </div>
                 <div className="flex justify-between items-center p-3 bg-gray-800/40 rounded-lg border border-gray-800/50">
                   <span className="text-gray-400">Frequency:</span>
                   <span className="text-gray-100 font-mono bg-gray-800/80 px-4 py-1.5 rounded-lg">
-                    {(realTimeData?.frequency ?? 0).toFixed(2)} Hz
+                    {(inputData?.frequency ?? 0).toFixed(2)} Hz
                   </span>
                 </div>
                 <div className="flex justify-between items-center p-3 bg-gray-800/40 rounded-lg border border-gray-800/50">
                   <span className="text-gray-400">Temperature:</span>
                   <span className="text-gray-100 font-mono bg-gray-800/80 px-4 py-1.5 rounded-lg">
-                    {(realTimeData?.temperature ?? 0).toFixed(2)} °C
+                    {(inputData?.temperature ?? 0).toFixed(2)} °C
                   </span>
                 </div>
                 <div className="flex justify-between items-center p-3 bg-gray-800/40 rounded-lg border border-gray-800/50">
                   <span className="text-gray-400">Load Connected:</span>
                   <span className={`px-4 py-1.5 rounded-full text-sm font-medium ${
-                    (realTimeData?.a_phase_current ?? 0) > 0 ? 
+                    (inputData?.a_phase_current ?? 0) > 0 ? 
                     'bg-green-500/20 text-green-400 border border-green-500/30' :
                     'bg-red-500/20 text-red-400 border border-red-500/30'
                   }`}>
-                    {(realTimeData?.a_phase_current ?? 0) > 0 ? 'YES' : 'NO'}
+                    {(inputData?.a_phase_current ?? 0) > 0 ? 'YES' : 'NO'}
                   </span>
                 </div>
                 <div className="flex justify-between items-center p-3 bg-gray-800/40 rounded-lg border border-gray-800/50">
                   <span className="text-gray-400">Energy Consumption:</span>
                   <span className="text-gray-100 font-mono bg-gray-800/80 px-4 py-1.5 rounded-lg">
-                    {(realTimeData?.a_phase_active_power ?? 0).toFixed(2)} kW
+                    {(inputData?.a_phase_active_power ?? 0).toFixed(2)} kW
                   </span>
                 </div>
               </div>
@@ -480,71 +508,75 @@ export default function Dashboard() {
             </div>
 
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 sm:gap-6 lg:gap-8">
-              {Object.entries(configurations[selectedConfig]).map(([type, measurements]) => (
-                <div key={type} className="space-y-4 sm:space-y-6">
-                  <h2 className="text-xl sm:text-2xl font-semibold text-gray-100 capitalize">
-                    {type} Measurements
-                  </h2>
-                  <div className="space-y-4 sm:space-y-6 bg-gray-900/50 p-4 sm:p-6 rounded-xl border border-gray-800">
-                    {Object.entries(measurements).map(([measureType, phases]) => (
-                      <div key={measureType} className="space-y-2 sm:space-y-3">
-                        <div className="flex justify-between items-center">
-                          <h3 className="text-base sm:text-lg text-gray-300 capitalize font-medium">
-                            {measureType}
-                          </h3>
-                          <button
-                            onClick={() => {
-                              // Use consistent paths for current and voltage
-                              const path = measureType === 'current' 
-                                ? '/dashboard/details/input/current'
-                                : measureType === 'voltage'
-                                ? '/dashboard/details/input/voltage'
-                                : measureType === 'dc'
-                                ? '/dashboard/details/input/dc'
-                                : '/dashboard/details/input/ac';
-                              router.push(path);
-                            }}
-                            className="px-3 py-1 text-sm bg-blue-500/20 text-blue-400 rounded-lg 
-                              hover:bg-blue-500/30 transition-colors"
-                          >
-                            View Details
-                          </button>
-                        </div>
-                        <div className="space-y-2">
-                          {phases.map((phase: string) => {
-                            let value = 0
-                            if (realTimeData) {
-                              // Map the phase to the corresponding data field
-                              const fieldMap: { [key: string]: string } = {
-                                'Phase A': measureType === 'voltage' ? 'a_phase_voltage' : 'a_phase_current',
-                                'Phase B': measureType === 'voltage' ? 'b_phase_voltage' : 'b_phase_current',
-                                'Phase C': measureType === 'voltage' ? 'c_phase_voltage' : 'c_phase_current',
-                                'DC Voltage': 'dc_voltage',
-                                'DC Current': 'dc_current',
-                                'AC Voltage': 'a_phase_voltage', // Using Phase A for single phase
-                                'AC Current': 'a_phase_current'  // Using Phase A for single phase
-                              }
-                              value = realTimeData[fieldMap[phase] as keyof RealTimeData] as number
-                            }
+              {Object.entries(configurations[selectedConfig]).map(([type, measurements]) => {
+                const isInput = type === 'input';
+                const data = isInput ? inputData : outputData;
 
-                            return (
-                              <div key={phase} 
-                                className="flex justify-between items-center p-2 sm:p-3 bg-gray-800/50 
-                                  rounded-lg border border-gray-700 text-sm sm:text-base"
-                              >
-                                <span className="text-gray-400">{phase}:</span>
-                                <span className="text-gray-100 font-mono">
-                                  {value.toFixed(2)}
-                                </span>
-                              </div>
-                            )
-                          })}
+                return (
+                  <div key={type} className="space-y-4 sm:space-y-6">
+                    <h2 className="text-xl sm:text-2xl font-semibold text-gray-100 capitalize">
+                      {type} Measurements
+                    </h2>
+                    <div className="space-y-4 sm:space-y-6 bg-gray-900/50 p-4 sm:p-6 rounded-xl border border-gray-800">
+                      {Object.entries(measurements).map(([measureType, phases]) => (
+                        <div key={measureType} className="space-y-2 sm:space-y-3">
+                          <div className="flex justify-between items-center">
+                            <h3 className="text-base sm:text-lg text-gray-300 capitalize font-medium">
+                              {measureType}
+                            </h3>
+                            <button
+                              onClick={() => {
+                                const basePath = isInput ? '/dashboard/details/input' : '/dashboard/details/output';
+                                const path = measureType === 'current' 
+                                  ? `${basePath}/current`
+                                  : measureType === 'voltage'
+                                  ? `${basePath}/voltage`
+                                  : measureType === 'dc'
+                                  ? `${basePath}/dc`
+                                  : `${basePath}/ac`;
+                                router.push(path);
+                              }}
+                              className="px-3 py-1 text-sm bg-blue-500/20 text-blue-400 rounded-lg 
+                                hover:bg-blue-500/30 transition-colors"
+                            >
+                              View Details
+                            </button>
+                          </div>
+                          <div className="space-y-2">
+                            {phases.map((phase: string) => {
+                              let value = 0;
+                              if (data) {
+                                const fieldMap: { [key: string]: string } = {
+                                  'Phase A': measureType === 'voltage' ? 'a_phase_voltage' : 'a_phase_current',
+                                  'Phase B': measureType === 'voltage' ? 'b_phase_voltage' : 'b_phase_current',
+                                  'Phase C': measureType === 'voltage' ? 'c_phase_voltage' : 'c_phase_current',
+                                  'DC Voltage': 'dc_voltage',
+                                  'DC Current': 'dc_current',
+                                  'AC Voltage': 'a_phase_voltage',
+                                  'AC Current': 'a_phase_current'
+                                };
+                                value = data[fieldMap[phase] as keyof RealTimeData] as number;
+                              }
+
+                              return (
+                                <div key={phase} 
+                                  className="flex justify-between items-center p-2 sm:p-3 bg-gray-800/50 
+                                    rounded-lg border border-gray-700 text-sm sm:text-base"
+                                >
+                                  <span className="text-gray-400">{phase}:</span>
+                                  <span className="text-gray-100 font-mono">
+                                    {value.toFixed(2)}
+                                  </span>
+                                </div>
+                              );
+                            })}
+                          </div>
                         </div>
-                      </div>
-                    ))}
+                      ))}
+                    </div>
                   </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
           </div>
         </div>
