@@ -80,30 +80,31 @@ const configurations: { [key: string]: Configuration } = {
 
 // Add interface for real-time data
 interface RealTimeData {
-  id: string
+  id: number
   computer_ts: string
-  a_phase_voltage: number
-  a_phase_current: number
-  a_phase_active_power: number
-  a_phase_reactive_power: number
-  a_phase_apparent_power: number
-  a_power_factor: number
-  b_phase_voltage: number
-  b_phase_current: number
-  b_phase_active_power: number
-  b_phase_reactive_power: number
-  b_phase_apparent_power: number
-  b_power_factor: number
-  c_phase_voltage: number
-  c_phase_current: number
-  c_phase_active_power: number
-  c_phase_reactive_power: number
-  c_phase_apparent_power: number
-  c_power_factor: number
-  frequency: number
-  dc_voltage: number
-  dc_current: number
-  temperature: number
+  "A Phase Voltage": number
+  "A Phase Current": number
+  "A Phase Active Power": number
+  "A Phase Reactive Power": number
+  "A Phase Apparent Power": number
+  "A Power Factor": number
+  "B Phase Voltage": number
+  "B Phase Current": number
+  "B Phase Active Power": number
+  "B Phase Reactive Power": number
+  "B Phase Apparent Power": number
+  "B Power Factor": number
+  "C Phase Voltage": number
+  "C Phase Current": number
+  "C Phase Active Power": number
+  "C Phase Reactive Power": number
+  "C Phase Apparent Power": number
+  "C Power Factor": number
+  "Frequency": number
+  "DC Voltage": number
+  "DC Current": number
+  "Temperature": number
+  created_at: string
 }
 
 interface OutputRealTimeData extends RealTimeData {} // Same structure as RealTimeData
@@ -127,17 +128,10 @@ interface EnergyMetrics {
   energyConsumption: number;
 }
 
-// Add this interface near your other interfaces
-interface RealTimeStatus {
-  id: string;
-  trip_button: number;
-  reset_button: number;
-  // ... other fields as needed
-}
-
 export default function Dashboard() {
   const [mounted, setMounted] = useState(false)
   const [selectedConfig, setSelectedConfig] = useState(Object.keys(configurations)[0])
+  const [selectedPhase, setSelectedPhase] = useState<'A' | 'B' | 'C'>('A')
   const router = useRouter()
   const supabase = createClientComponentClient()
   const [user, setUser] = useState<User | null>(null)
@@ -151,7 +145,41 @@ export default function Dashboard() {
     breakerStatus: 'closed',
     faultStatus: false
   });
-  const [realTimeStatus, setRealTimeStatus] = useState<RealTimeStatus | null>(null);
+
+  const handleTrip = async () => {
+    try {
+      // Update relay status to tripped
+      setRelayStatus(prev => ({
+        ...prev,
+        status: 'tripped',
+        breakerStatus: 'open'
+      }));
+
+      // Here you would typically make an API call to trigger the trip action
+      // For now, we'll just log it
+      console.log('Trip action triggered');
+    } catch (error) {
+      console.error('Error triggering trip:', error);
+    }
+  };
+
+  const handleReset = async () => {
+    try {
+      // Reset relay status to healthy
+      setRelayStatus(prev => ({
+        ...prev,
+        status: 'healthy',
+        breakerStatus: 'closed',
+        faultStatus: false
+      }));
+
+      // Here you would typically make an API call to trigger the reset action
+      // For now, we'll just log it
+      console.log('Reset action triggered');
+    } catch (error) {
+      console.error('Error triggering reset:', error);
+    }
+  };
 
   useEffect(() => {
     setMounted(true)
@@ -170,7 +198,7 @@ export default function Dashboard() {
     const fetchRealTimeData = async () => {
       // Fetch input data
       const { data: inputData, error: inputError } = await supabase
-        .from('real_time_data')
+        .from('input_real_time_data')
         .select('*')
         .order('computer_ts', { ascending: false })
         .limit(1)
@@ -200,23 +228,21 @@ export default function Dashboard() {
     // Initial fetch
     fetchRealTimeData()
 
-    // Set up real-time subscriptions
-    const inputSubscription = supabase
-      .channel('input_data_changes')
-      .on('postgres_changes', 
-        { event: 'INSERT', schema: 'public', table: 'real_time_data' },
-        (payload) => {
-          setInputData(payload.new as RealTimeData)
-        }
-      )
+    // Set up broadcast channel for input data
+    const inputChannel = supabase
+      .channel('input_realtime')
+      .on('broadcast', { event: 'data_update' }, (payload: { payload: RealTimeData }) => {
+        setInputData(payload.payload)
+      })
       .subscribe()
 
+    // Keep output data subscription as is
     const outputSubscription = supabase
       .channel('output_data_changes')
       .on('postgres_changes', 
         { event: 'INSERT', schema: 'public', table: 'output_real_time_data' },
-        (payload) => {
-          setOutputData(payload.new as OutputRealTimeData)
+        (payload: { new: OutputRealTimeData }) => {
+          setOutputData(payload.new)
         }
       )
       .subscribe()
@@ -225,120 +251,11 @@ export default function Dashboard() {
     const interval = setInterval(fetchRealTimeData, 5000)
 
     return () => {
-      inputSubscription.unsubscribe()
+      inputChannel.unsubscribe()
       outputSubscription.unsubscribe()
       clearInterval(interval)
     }
   }, [supabase])
-
-  useEffect(() => {
-    const fetchStatus = async () => {
-      try {
-        // First try to fetch existing status
-        const { data: existingData, error: fetchError } = await supabase
-          .from('real_time_status')
-          .select('*')
-          .order('id', { ascending: false })
-          .limit(1)
-          .single();
-
-        if (fetchError && fetchError.code === 'PGRST116') { // No rows returned
-          // Create initial record if none exists
-          const { data: newData, error: insertError } = await supabase
-            .from('real_time_status')
-            .insert({
-              output_phase_c_over_voltage_status: 0,
-              output_phase_c_over_voltage_set_value: 0,
-              output_phase_a_under_voltage_status: 0,
-              output_phase_a_under_voltage_set_value: 0,
-              output_phase_b_under_voltage_status: 0,
-              output_phase_b_under_voltage_set_value: 0,
-              output_phase_c_under_voltage_status: 0,
-              output_phase_c_under_voltage_set_value: 0,
-              output_over_frequency_status: 0,
-              output_over_frequency_set_value: 0,
-              output_under_frequency_status: 0,
-              output_under_frequency_set_value: 0,
-              output_dc_over_voltage_status: 0,
-              output_dc_over_voltage_set_value: 0,
-              output_dc_under_voltage_status: 0,
-              output_dc_under_voltage_set_value: 0,
-              output_dc_over_current_status: 0,
-              output_dc_over_current_set_value: 0,
-              output_over_temperature_status: 0,
-              output_over_temperature_set_value: 0,
-              instantaneous_trip_characteristics_status: 0,
-              inverse_time_characteristics_status: 0,
-              definite_time_characteristics_status: 0,
-              differential_relay_characteristics_status: 0,
-              trip_button: 0,
-              reset_button: 0
-            })
-            .select()
-            .single();
-
-          if (insertError) throw insertError;
-          setRealTimeStatus(newData);
-        } else if (fetchError) {
-          throw fetchError;
-        } else {
-          setRealTimeStatus(existingData);
-        }
-      } catch (error) {
-        console.error('Error handling status:', error);
-      }
-    };
-
-    // Initial fetch
-    fetchStatus();
-
-    // Subscribe to changes
-    const subscription = supabase
-      .channel('real_time_status_changes')
-      .on('postgres_changes',
-        { event: '*', schema: 'public', table: 'real_time_status' },
-        (payload) => {
-          setRealTimeStatus(payload.new as RealTimeStatus);
-        }
-      )
-      .subscribe();
-
-    return () => {
-      subscription.unsubscribe();
-    };
-  }, [supabase]);
-
-  const handleTrip = async () => {
-    try {
-      const { data, error } = await supabase
-        .from('real_time_status')
-        .update({ trip_button: realTimeStatus?.trip_button === 1 ? 0 : 1 })
-        .eq('id', realTimeStatus?.id)
-        .select()
-        .single();
-
-      if (error) throw error;
-      setRealTimeStatus(data);
-    } catch (error) {
-      console.error('Error updating trip status:', error);
-    }
-  };
-
-  const handleReset = async () => {
-    try {
-      const { data, error } = await supabase
-        .from('real_time_status')
-        .update({ reset_button: realTimeStatus?.reset_button === 1 ? 0 : 1 })
-        .eq('id', realTimeStatus?.id)
-        .select()
-        .single();
-
-      if (error) throw error;
-      setRealTimeStatus(data);
-    } catch (error) {
-      console.error('Error updating reset status:', error);
-    }
-  };
 
   if (!mounted) return null
 
@@ -377,12 +294,21 @@ export default function Dashboard() {
                   <span className="text-blue-400 font-medium">{selectedConfig}</span>
                 </div>
                 <div className="flex justify-between items-center p-3 bg-gray-800/40 rounded-lg border border-gray-800/50">
-                  <span className="text-gray-400">Input/Output Status:</span>
+                  <span className="text-gray-400">Input Status:</span>
                   <span className={`px-4 py-1.5 rounded-full text-sm font-medium ${
                     relayStatus.inputStatus === 'healthy' ? 'bg-green-500/20 text-green-400 border border-green-500/30' :
                     'bg-red-500/20 text-red-400 border border-red-500/30'
                   }`}>
                     {relayStatus.inputStatus.toUpperCase()}
+                  </span>
+                </div>
+                <div className="flex justify-between items-center p-3 bg-gray-800/40 rounded-lg border border-gray-800/50">
+                  <span className="text-gray-400">Output Status:</span>
+                  <span className={`px-4 py-1.5 rounded-full text-sm font-medium ${
+                    relayStatus.outputStatus === 'healthy' ? 'bg-green-500/20 text-green-400 border border-green-500/30' :
+                    'bg-red-500/20 text-red-400 border border-red-500/30'
+                  }`}>
+                    {relayStatus.outputStatus.toUpperCase()}
                   </span>
                 </div>
                 <div className="flex justify-between items-center p-3 bg-gray-800/40 rounded-lg border border-gray-800/50">
@@ -406,23 +332,25 @@ export default function Dashboard() {
                 <div className="flex gap-4 mt-6">
                   <button
                     onClick={handleTrip}
-                    className={`flex-1 py-2.5 rounded-lg transition-colors border font-medium ${
-                      realTimeStatus?.trip_button === 1
-                        ? 'bg-red-500 text-white border-red-500'
-                        : 'bg-red-500/20 text-red-400 border-red-500/30 hover:bg-red-500/30'
+                    disabled={relayStatus.status === 'tripped'}
+                    className={`flex-1 px-4 py-2 rounded-lg font-medium transition-colors ${
+                      relayStatus.status === 'tripped'
+                        ? 'bg-red-500/20 text-red-400 border border-red-500/30 cursor-not-allowed'
+                        : 'bg-red-500/20 text-red-400 border border-red-500/30 hover:bg-red-500/30'
                     }`}
                   >
-                    {realTimeStatus?.trip_button === 1 ? 'Tripped' : 'Trip'}
+                    TRIP
                   </button>
                   <button
                     onClick={handleReset}
-                    className={`flex-1 py-2.5 rounded-lg transition-colors border font-medium ${
-                      realTimeStatus?.reset_button === 1
-                        ? 'bg-blue-500 text-white border-blue-500'
-                        : 'bg-blue-500/20 text-blue-400 border-blue-500/30 hover:bg-blue-500/30'
+                    disabled={relayStatus.status === 'healthy'}
+                    className={`flex-1 px-4 py-2 rounded-lg font-medium transition-colors ${
+                      relayStatus.status === 'healthy'
+                        ? 'bg-green-500/20 text-green-400 border border-green-500/30 cursor-not-allowed'
+                        : 'bg-green-500/20 text-green-400 border border-green-500/30 hover:bg-green-500/30'
                     }`}
                   >
-                    {realTimeStatus?.reset_button === 1 ? 'Reset' : 'Reset'}
+                    RESET
                   </button>
                 </div>
               </div>
@@ -433,57 +361,54 @@ export default function Dashboard() {
                 <div className="w-2 h-2 rounded-full bg-green-500 mr-2 animate-pulse"></div>
                 Energy Monitoring Panel
               </h2>
+              <div className="mb-4">
+                <select
+                  value={selectedPhase}
+                  onChange={(e) => setSelectedPhase(e.target.value as 'A' | 'B' | 'C')}
+                  className="w-full px-3 py-2 rounded-lg bg-gray-800/50 border border-gray-700 
+                    text-gray-100 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/50 
+                    appearance-none cursor-pointer"
+                >
+                  <option value="A">Phase A</option>
+                  <option value="B">Phase B</option>
+                  <option value="C">Phase C</option>
+                </select>
+              </div>
               <div className="space-y-4">
                 <div className="flex justify-between items-center p-3 bg-gray-800/40 rounded-lg border border-gray-800/50">
                   <span className="text-gray-400">Active Energy:</span>
                   <span className="text-gray-100 font-mono bg-gray-800/80 px-4 py-1.5 rounded-lg">
-                    {(inputData?.a_phase_active_power ?? 0).toFixed(2)} kWh
+                    {(inputData?.[`${selectedPhase} Phase Active Power`] ?? 0).toFixed(2)} kWh
                   </span>
                 </div>
                 <div className="flex justify-between items-center p-3 bg-gray-800/40 rounded-lg border border-gray-800/50">
                   <span className="text-gray-400">Reactive Energy:</span>
                   <span className="text-gray-100 font-mono bg-gray-800/80 px-4 py-1.5 rounded-lg">
-                    {(inputData?.a_phase_reactive_power ?? 0).toFixed(2)} kVARh
+                    {(inputData?.[`${selectedPhase} Phase Reactive Power`] ?? 0).toFixed(2)} kVARh
                   </span>
                 </div>
                 <div className="flex justify-between items-center p-3 bg-gray-800/40 rounded-lg border border-gray-800/50">
                   <span className="text-gray-400">Apparent Power:</span>
                   <span className="text-gray-100 font-mono bg-gray-800/80 px-4 py-1.5 rounded-lg">
-                    {(inputData?.a_phase_apparent_power ?? 0).toFixed(2)} kVA
+                    {(inputData?.[`${selectedPhase} Phase Apparent Power`] ?? 0).toFixed(2)} kVA
                   </span>
                 </div>
                 <div className="flex justify-between items-center p-3 bg-gray-800/40 rounded-lg border border-gray-800/50">
                   <span className="text-gray-400">Power Factor:</span>
                   <span className="text-gray-100 font-mono bg-gray-800/80 px-4 py-1.5 rounded-lg">
-                    {(inputData?.a_power_factor ?? 0).toFixed(2)}
+                    {(inputData?.[`${selectedPhase} Power Factor`] ?? 0).toFixed(2)}
                   </span>
                 </div>
                 <div className="flex justify-between items-center p-3 bg-gray-800/40 rounded-lg border border-gray-800/50">
                   <span className="text-gray-400">Frequency:</span>
                   <span className="text-gray-100 font-mono bg-gray-800/80 px-4 py-1.5 rounded-lg">
-                    {(inputData?.frequency ?? 0).toFixed(2)} Hz
+                    {(inputData?.["Frequency"] ?? 0).toFixed(2)} Hz
                   </span>
                 </div>
                 <div className="flex justify-between items-center p-3 bg-gray-800/40 rounded-lg border border-gray-800/50">
                   <span className="text-gray-400">Temperature:</span>
                   <span className="text-gray-100 font-mono bg-gray-800/80 px-4 py-1.5 rounded-lg">
-                    {(inputData?.temperature ?? 0).toFixed(2)} °C
-                  </span>
-                </div>
-                <div className="flex justify-between items-center p-3 bg-gray-800/40 rounded-lg border border-gray-800/50">
-                  <span className="text-gray-400">Load Connected:</span>
-                  <span className={`px-4 py-1.5 rounded-full text-sm font-medium ${
-                    (inputData?.a_phase_current ?? 0) > 0 ? 
-                    'bg-green-500/20 text-green-400 border border-green-500/30' :
-                    'bg-red-500/20 text-red-400 border border-red-500/30'
-                  }`}>
-                    {(inputData?.a_phase_current ?? 0) > 0 ? 'YES' : 'NO'}
-                  </span>
-                </div>
-                <div className="flex justify-between items-center p-3 bg-gray-800/40 rounded-lg border border-gray-800/50">
-                  <span className="text-gray-400">Energy Consumption:</span>
-                  <span className="text-gray-100 font-mono bg-gray-800/80 px-4 py-1.5 rounded-lg">
-                    {(inputData?.a_phase_active_power ?? 0).toFixed(2)} kW
+                    {(inputData?.["Temperature"] ?? 0).toFixed(2)} °C
                   </span>
                 </div>
               </div>
@@ -547,13 +472,13 @@ export default function Dashboard() {
                               let value = 0;
                               if (data) {
                                 const fieldMap: { [key: string]: string } = {
-                                  'Phase A': measureType === 'voltage' ? 'a_phase_voltage' : 'a_phase_current',
-                                  'Phase B': measureType === 'voltage' ? 'b_phase_voltage' : 'b_phase_current',
-                                  'Phase C': measureType === 'voltage' ? 'c_phase_voltage' : 'c_phase_current',
-                                  'DC Voltage': 'dc_voltage',
-                                  'DC Current': 'dc_current',
-                                  'AC Voltage': 'a_phase_voltage',
-                                  'AC Current': 'a_phase_current'
+                                  'Phase A': measureType === 'voltage' ? 'A Phase Voltage' : 'A Phase Current',
+                                  'Phase B': measureType === 'voltage' ? 'B Phase Voltage' : 'B Phase Current',
+                                  'Phase C': measureType === 'voltage' ? 'C Phase Voltage' : 'C Phase Current',
+                                  'DC Voltage': 'DC Voltage',
+                                  'DC Current': 'DC Current',
+                                  'AC Voltage': 'A Phase Voltage',
+                                  'AC Current': 'A Phase Current'
                                 };
                                 value = data[fieldMap[phase] as keyof RealTimeData] as number;
                               }
