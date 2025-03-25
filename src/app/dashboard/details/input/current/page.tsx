@@ -31,10 +31,10 @@ ChartJS.register(
 interface RealTimeData {
   id: string;
   computer_ts: string;
-  a_phase_current: number;
-  b_phase_current: number;
-  c_phase_current: number;
-  frequency: number;
+  "A Phase Current": number;
+  "B Phase Current": number;
+  "C Phase Current": number;
+  "Frequency": number;
 }
 
 interface PhaseData {
@@ -81,10 +81,10 @@ export default function CurrentDetails() {
     try {
       console.log('Attempting to save historical data:', {
         timestamp: data.computer_ts,
-        a_phase_current: data.a_phase_current,
-        b_phase_current: data.b_phase_current,
-        c_phase_current: data.c_phase_current,
-        frequency: data.frequency
+        a_phase_current: data["A Phase Current"],
+        b_phase_current: data["B Phase Current"],
+        c_phase_current: data["C Phase Current"],
+        frequency: data["Frequency"]
       })
 
       // First check if data with this timestamp already exists
@@ -103,10 +103,10 @@ export default function CurrentDetails() {
         .from('historical_data')
         .insert({
           timestamp: data.computer_ts,
-          a_phase_current: data.a_phase_current,
-          b_phase_current: data.b_phase_current,
-          c_phase_current: data.c_phase_current,
-          frequency: data.frequency
+          a_phase_current: data["A Phase Current"],
+          b_phase_current: data["B Phase Current"],
+          c_phase_current: data["C Phase Current"],
+          frequency: data["Frequency"]
         })
         .select()
         .single()
@@ -170,8 +170,15 @@ export default function CurrentDetails() {
       setLoading(true)
       try {
         const { data, error } = await supabase
-          .from('real_time_data')
-          .select('*')
+          .from('input_real_time_data')
+          .select(`
+            id,
+            computer_ts,
+            "A Phase Current",
+            "B Phase Current",
+            "C Phase Current",
+            "Frequency"
+          `)
           .order('computer_ts', { ascending: false })
           .limit(100)
 
@@ -191,18 +198,18 @@ export default function CurrentDetails() {
     const updatePhaseData = (latestData: RealTimeData) => {
       setPhaseData({
         'Phase A': {
-          amplitude: latestData.a_phase_current,
-          frequency: latestData.frequency,
+          amplitude: latestData["A Phase Current"],
+          frequency: latestData["Frequency"],
           phaseShift: 0
         },
         'Phase B': {
-          amplitude: latestData.b_phase_current,
-          frequency: latestData.frequency,
+          amplitude: latestData["B Phase Current"],
+          frequency: latestData["Frequency"],
           phaseShift: 2 * Math.PI / 3
         },
         'Phase C': {
-          amplitude: latestData.c_phase_current,
-          frequency: latestData.frequency,
+          amplitude: latestData["C Phase Current"],
+          frequency: latestData["Frequency"],
           phaseShift: 4 * Math.PI / 3
         }
       })
@@ -215,25 +222,23 @@ export default function CurrentDetails() {
           {
             event: '*',
             schema: 'public',
-            table: 'real_time_data'
+            table: 'input_real_time_data'
           },
           async (payload) => {
             if (!isSubscribed) return
             if (payload.eventType === 'INSERT' || payload.eventType === 'UPDATE') {
               const newData = payload.new as RealTimeData
               
-              // Get the latest data from state instead of using realTimeData directly
               setRealTimeData(current => {
                 const lastData = current[0]
                 const threshold = 0.1
 
                 const hasAmplitudeChange = !lastData ||
-                  Math.abs(newData.a_phase_current - lastData.a_phase_current) > threshold ||
-                  Math.abs(newData.b_phase_current - lastData.b_phase_current) > threshold ||
-                  Math.abs(newData.c_phase_current - lastData.c_phase_current) > threshold
+                  Math.abs(newData["A Phase Current"] - lastData["A Phase Current"]) > threshold ||
+                  Math.abs(newData["B Phase Current"] - lastData["B Phase Current"]) > threshold ||
+                  Math.abs(newData["C Phase Current"] - lastData["C Phase Current"]) > threshold
 
                 if (hasAmplitudeChange) {
-                  // Call saveHistoricalData outside of the state update
                   void saveHistoricalData(newData)
                 }
 
@@ -262,8 +267,15 @@ export default function CurrentDetails() {
       if (!isSubscribed) return
       try {
         const { data, error } = await supabase
-          .from('real_time_data')
-          .select('*')
+          .from('input_real_time_data')
+          .select(`
+            id,
+            computer_ts,
+            "A Phase Current",
+            "B Phase Current",
+            "C Phase Current",
+            "Frequency"
+          `)
           .order('computer_ts', { ascending: false })
           .limit(1)
           .single()
@@ -274,12 +286,11 @@ export default function CurrentDetails() {
             const threshold = 0.1
 
             const hasAmplitudeChange = !lastData ||
-              Math.abs(data.a_phase_current - lastData.a_phase_current) > threshold ||
-              Math.abs(data.b_phase_current - lastData.b_phase_current) > threshold ||
-              Math.abs(data.c_phase_current - lastData.c_phase_current) > threshold
+              Math.abs(data["A Phase Current"] - lastData["A Phase Current"]) > threshold ||
+              Math.abs(data["B Phase Current"] - lastData["B Phase Current"]) > threshold ||
+              Math.abs(data["C Phase Current"] - lastData["C Phase Current"]) > threshold
 
             if (hasAmplitudeChange) {
-              // Call saveHistoricalData outside of the state update
               void saveHistoricalData(data)
             }
 
@@ -322,32 +333,28 @@ export default function CurrentDetails() {
     const samplingRate = 50
     const totalPoints = samplingRate
     
-    // Use animationTime for continuous animation
     const timePoints = Array.from(
       { length: totalPoints }, 
       (_, i) => ((i * duration) / totalPoints + animationTime) % duration
     )
     
     const latestData = realTimeData[0]
-    const currentFrequency = userFrequency ?? latestData.frequency
+    const currentFrequency = userFrequency ?? latestData["Frequency"]
     
-    // Calculate the maximum amplitude among all phases
     const maxAmplitude = Math.max(
-      Math.abs(latestData.a_phase_current),
-      Math.abs(latestData.b_phase_current),
-      Math.abs(latestData.c_phase_current)
+      Math.abs(latestData["A Phase Current"]),
+      Math.abs(latestData["B Phase Current"]),
+      Math.abs(latestData["C Phase Current"])
     )
     
-    // Sort time points to ensure proper rendering
     const sortedTimePoints = [...timePoints].sort((a, b) => a - b)
     
-    // Create datasets with segments
     const datasets = [
       {
         label: 'Phase A',
         data: sortedTimePoints.map(t => ({
           x: t,
-          y: latestData.a_phase_current * Math.sin(2 * Math.PI * currentFrequency * (t/1000))
+          y: latestData["A Phase Current"] * Math.sin(2 * Math.PI * currentFrequency * (t/1000))
         })),
         borderColor: colors['Phase A'],
         backgroundColor: colors['Phase A'].replace('1)', '0.5)'),
@@ -361,7 +368,7 @@ export default function CurrentDetails() {
         label: 'Phase B',
         data: sortedTimePoints.map(t => ({
           x: t,
-          y: latestData.b_phase_current * Math.sin(2 * Math.PI * currentFrequency * (t/1000) + 2 * Math.PI / 3)
+          y: latestData["B Phase Current"] * Math.sin(2 * Math.PI * currentFrequency * (t/1000) + 2 * Math.PI / 3)
         })),
         borderColor: colors['Phase B'],
         backgroundColor: colors['Phase B'].replace('1)', '0.5)'),
@@ -375,7 +382,7 @@ export default function CurrentDetails() {
         label: 'Phase C',
         data: sortedTimePoints.map(t => ({
           x: t,
-          y: latestData.c_phase_current * Math.sin(2 * Math.PI * currentFrequency * (t/1000) + 4 * Math.PI / 3)
+          y: latestData["C Phase Current"] * Math.sin(2 * Math.PI * currentFrequency * (t/1000) + 4 * Math.PI / 3)
         })),
         borderColor: colors['Phase C'],
         backgroundColor: colors['Phase C'].replace('1)', '0.5)'),
@@ -459,8 +466,8 @@ export default function CurrentDetails() {
           text: 'Current (A)',
           color: '#9CA3AF'
         },
-        min: -Math.ceil((realTimeData[0]?.a_phase_current || 10) * 1.2),
-        max: Math.ceil((realTimeData[0]?.a_phase_current || 10) * 1.2),
+        min: -Math.ceil((realTimeData[0]?.["A Phase Current"] || 10) * 1.2),
+        max: Math.ceil((realTimeData[0]?.["A Phase Current"] || 10) * 1.2),
         grid: { color: '#374151' },
         ticks: { 
           color: '#9CA3AF',
@@ -472,9 +479,9 @@ export default function CurrentDetails() {
     }
   }
 
-  const FrequencyControl = () => {
+  const ScopeControl = () => {
     const latestData = realTimeData[0]
-    const currentFrequency = userFrequency ?? (latestData?.frequency ?? 50)
+    const currentFrequency = userFrequency ?? (latestData?.["Frequency"] ?? 50)
 
     return (
       <div className="bg-gray-900/50 p-3 xs:p-4 sm:p-6 rounded-lg xs:rounded-xl border border-gray-800 
@@ -483,10 +490,10 @@ export default function CurrentDetails() {
           <div className="flex items-center justify-between">
             <div>
               <h3 className="text-sm xs:text-base sm:text-lg font-semibold text-gray-100">
-                Frequency Control
+                Scope Control
               </h3>
               <p className="text-xs sm:text-sm text-gray-400 mt-0.5">
-                Adjust visualization frequency
+                Adjust visualization scope
               </p>
             </div>
             <button
@@ -513,12 +520,12 @@ export default function CurrentDetails() {
             <span className="text-gray-300 font-mono bg-gray-800/80 px-2 py-1 xs:px-3 xs:py-1.5 
               rounded-lg min-w-[60px] xs:min-w-[70px] sm:min-w-[80px] text-center 
               text-xs xs:text-sm sm:text-base">
-              {currentFrequency} Hz
+              {currentFrequency}
             </span>
           </div>
           {userFrequency !== null && (
             <p className="text-xs text-amber-400/80">
-              ⚠️ Frequency manually adjusted. Real-time frequency: {latestData?.frequency.toFixed(2)} Hz
+              ⚠️ Scope manually adjusted. Real-time scope: {latestData?.["Frequency"].toFixed(2)} Hz
             </p>
           )}
         </div>
@@ -567,7 +574,7 @@ export default function CurrentDetails() {
               </div>
             ) : (
               <>
-                <FrequencyControl />
+                <ScopeControl />
                 <div className="bg-gray-900/50 p-2 xs:p-3 sm:p-4 md:p-6 rounded-lg xs:rounded-xl border 
                   border-gray-800 backdrop-blur-sm">
                   <div className="h-[250px] xs:h-[300px] sm:h-[400px] lg:h-[500px]">
@@ -602,10 +609,10 @@ export default function CurrentDetails() {
                           </span>
                         </div>
                         <div className="flex justify-between items-center p-2 xs:p-3 bg-gray-800/40 rounded-lg">
-                          <span className="text-xs xs:text-sm sm:text-base text-gray-400">Frequency</span>
+                          <span className="text-xs xs:text-sm sm:text-base text-gray-400">Scope</span>
                           <span className="text-xs xs:text-sm sm:text-base text-gray-100 font-mono 
                             bg-gray-800/80 px-1.5 xs:px-2 sm:px-3 py-1 xs:py-1.5 rounded-lg">
-                            {userFrequency !== null ? `${userFrequency} Hz*` : `${data.frequency} Hz`}
+                            {userFrequency !== null ? `${userFrequency}` : `${data.frequency}`}
                           </span>
                         </div>
                         <div className="flex justify-between items-center p-2 xs:p-3 bg-gray-800/40 rounded-lg">
@@ -617,7 +624,7 @@ export default function CurrentDetails() {
                         </div>
                         {userFrequency !== null && (
                           <p className="text-xs text-amber-400/80">
-                            *Visualization frequency (Real: {data.frequency} Hz, T: {(1000 / data.frequency).toFixed(2)} ms)
+                            *Visualization scope (Real: {data.frequency}, T: {(1000 / data.frequency).toFixed(2)} ms)
                           </p>
                         )}
                       </div>
@@ -666,7 +673,7 @@ export default function CurrentDetails() {
                           <th className="p-2">Phase A (A)</th>
                           <th className="p-2">Phase B (A)</th>
                           <th className="p-2">Phase C (A)</th>
-                          <th className="p-2">Frequency (Hz)</th>
+                          <th className="p-2">Scope</th>
                         </tr>
                       </thead>
                       <tbody>

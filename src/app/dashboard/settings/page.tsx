@@ -1,12 +1,12 @@
-'use client'
-
+"use client"
 import { useState, useEffect } from 'react'
 import { createClientComponentClient } from '@supabase/auth-helpers-nextjs'
 import { useRouter } from 'next/navigation'
 import { 
   ArrowLeft, Zap, AlertTriangle, Thermometer, Activity, Clock, Shield,
-  User, LogOut, Mail, Building, Phone
+  User, LogOut, Mail, Building, Phone, Download
 } from 'lucide-react'
+import * as XLSX from 'xlsx'
 
 interface RealTimeStatus {
   id?: string
@@ -113,15 +113,9 @@ interface UserProfile {
   phone: string
 }
 
-interface FaultSettings {
-  id?: string;
-  user_id?: string;
-  over_voltage_fault_enabled: boolean;
-  over_voltage_set_value: number;
-  over_voltage_time_chara: number;
-  over_current_fault_enabled: boolean;
-  over_current_set_value: number;
-  over_current_time_chara: number;
+interface Parameter {
+  Parameter: string;
+  Value: number;
 }
 
 // Add a Toggle Switch component for reusability and better click handling
@@ -249,7 +243,7 @@ export default function Settings() {
     trip_button: 0,
     reset_button: 0
   })
-  const [saveStatus, setSaveStatus] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle')
+  const [saveStatus, setSaveStatus] = useState<string>('')
   const [profile, setProfile] = useState<UserProfile>({
     id: '',
     name: '',
@@ -257,14 +251,8 @@ export default function Settings() {
     company: '',
     phone: ''
   })
-  const [faultSettings, setFaultSettings] = useState<FaultSettings>({
-    over_voltage_fault_enabled: false,
-    over_voltage_set_value: 0,
-    over_voltage_time_chara: 0,
-    over_current_fault_enabled: false,
-    over_current_set_value: 0,
-    over_current_time_chara: 0
-  });
+  const [parameters, setParameters] = useState<Parameter[]>([])
+  const [loading, setLoading] = useState(true)
 
   useEffect(() => {
     const fetchUserData = async () => {
@@ -356,59 +344,36 @@ export default function Settings() {
   }, [supabase, router])
 
   useEffect(() => {
-    const fetchFaultSettings = async () => {
-      const { data: { session } } = await supabase.auth.getSession();
-      if (!session) {
-        router.push('/login');
-        return;
-      }
-
+    const fetchParameters = async () => {
+      try {
       const { data, error } = await supabase
-        .from('fault_settings')
-        .select('*')
-        .eq('user_id', session.user.id)
-        .single();
+          .from('parameters_table')
+          .select('parameter, value')
+          .order('parameter')
 
-      if (error) {
-        if (error.code === 'PGRST116') {
-          // Create initial fault settings
-          const { data: newData, error: insertError } = await supabase
-            .from('fault_settings')
-            .insert([{
-              user_id: session.user.id,
-              over_voltage_fault_enabled: false,
-              over_voltage_set_value: 0,
-              over_voltage_time_chara: 0,
-              over_current_fault_enabled: false,
-              over_current_set_value: 0,
-              over_current_time_chara: 0
-            }])
-            .select()
-            .single();
-
-          if (!insertError && newData) {
-            setFaultSettings(newData);
-          } else {
-            console.error('Error creating fault settings:', insertError);
-          }
-        } else {
-          console.error('Error fetching fault settings:', error);
+        if (error) throw error
+        if (data) {
+          // Transform the data to match our interface
+          const transformedData = data.map(item => ({
+            Parameter: item.parameter,
+            Value: item.value
+          }))
+          setParameters(transformedData)
         }
-        return;
+      } catch (error) {
+        console.error('Error fetching parameters:', error)
+      } finally {
+        setLoading(false)
       }
+    }
 
-      if (data) {
-        setFaultSettings(data);
-      }
-    };
-
-    fetchFaultSettings();
-  }, [supabase, router]);
+    fetchParameters()
+  }, [])
 
   const handleStatusChange = async (field: keyof RealTimeStatus, value: number) => {
     const newStatus = { ...status, [field]: value }
     setStatus(newStatus)
-    setSaveStatus('saving')
+    setSaveStatus('Saving...')
 
     try {
       const { data: { session } } = await supabase.auth.getSession()
@@ -537,26 +502,26 @@ export default function Settings() {
           onConflict: 'id',
           ignoreDuplicates: false
         })
-        .eq('id', status.id)
+      .eq('id', status.id)
         .eq('user_id', session.user.id)
 
       if (statusError) {
         throw statusError
       }
 
-      setSaveStatus('saved')
+      setSaveStatus('Saved successfully!')
     } catch (error) {
       console.error('Error updating status:', error)
-      setSaveStatus('error')
+      setSaveStatus('Error saving changes')
+    } finally {
+      setTimeout(() => setSaveStatus(''), 3000)
     }
-
-    setTimeout(() => setSaveStatus('idle'), 2000)
   }
 
   const handleProfileChange = async (field: keyof UserProfile, value: string) => {
     const newProfile = { ...profile, [field]: value }
     setProfile(newProfile)
-    setSaveStatus('saving')
+    setSaveStatus('Saving...')
 
     const { error } = await supabase
       .from('user_profiles')
@@ -565,12 +530,12 @@ export default function Settings() {
 
     if (error) {
       console.error('Error updating profile:', error)
-      setSaveStatus('error')
+      setSaveStatus('Error saving changes')
     } else {
-      setSaveStatus('saved')
+      setSaveStatus('Saved successfully!')
     }
 
-    setTimeout(() => setSaveStatus('idle'), 2000)
+    setTimeout(() => setSaveStatus(''), 3000)
   }
 
   const handleLogout = async () => {
@@ -582,31 +547,121 @@ export default function Settings() {
     }
   }
 
-  const handleFaultSettingChange = async (field: keyof FaultSettings, value: boolean | number) => {
-    const newSettings = { ...faultSettings, [field]: value };
-    setFaultSettings(newSettings);
-    setSaveStatus('saving');
-
+  const handleExportToExcel = async () => {
     try {
+      setSaveStatus('Saving...')
+      
+      const { data: { session } } = await supabase.auth.getSession()
+      if (!session) {
+        throw new Error('No authenticated user')
+      }
+
+      // Fetch all records for the current user
+      const { data, error } = await supabase
+        .from('user_input_data')
+        .select('*')
+        .eq('user_id', session.user.id)
+        .order('created_at', { ascending: false })
+
+      if (error) throw error
+
+      if (!data || data.length === 0) {
+        throw new Error('No data to export')
+      }
+
+      // Convert the data to worksheet format
+      const worksheet = XLSX.utils.json_to_sheet(data)
+
+      // Create workbook and add the worksheet
+      const workbook = XLSX.utils.book_new()
+      XLSX.utils.book_append_sheet(workbook, worksheet, 'Protection Settings')
+
+      // Generate Excel file
+      XLSX.writeFile(workbook, 'User Data Input.xlsx')
+      
+      setSaveStatus('Saved successfully!')
+      setTimeout(() => setSaveStatus(''), 3000)
+    } catch (error) {
+      console.error('Error exporting data:', error)
+      setSaveStatus('Error exporting data')
+      setTimeout(() => setSaveStatus(''), 3000)
+    }
+  }
+
+  const handleParameterChange = async (parameter: string, value: number) => {
+    try {
+      setSaveStatus('Saving...')
+      
+      // Update local state immediately for UI responsiveness
+      setParameters(prev => 
+        prev.map(p => 
+          p.Parameter === parameter ? { ...p, Value: value } : p
+        )
+      )
+      
+      // Log for debugging
+      console.log('Updating parameter:', parameter, 'to value:', value)
+      
+      // Update the database
       const { error } = await supabase
-        .from('fault_settings')
-        .update(newSettings)
-        .eq('id', faultSettings.id)
-        .eq('user_id', faultSettings.user_id);
+        .from('parameters_table')
+        .update({ value: value })
+        .eq('parameter', parameter)
 
       if (error) {
-        console.error('Error updating fault settings:', error);
-        setSaveStatus('error');
-      } else {
-        setSaveStatus('saved');
+        console.error('Supabase error:', error)
+        // Revert local state if database update fails
+        setParameters(prev => 
+          prev.map(p => 
+            p.Parameter === parameter ? { ...p, Value: value === 1 ? 0 : 1 } : p
+          )
+        )
+        throw error
+      }
+      
+      setSaveStatus('Saved successfully!')
+    } catch (error) {
+      console.error('Error updating parameter:', error)
+      setSaveStatus('Error saving changes')
+    } finally {
+      setTimeout(() => setSaveStatus(''), 3000)
+    }
+  }
+
+  const handleResetAll = async () => {
+    try {
+      setSaveStatus('Resetting all parameters...')
+      
+      // Update local state first for immediate UI feedback
+      setParameters(prev => 
+        prev.map(p => ({ ...p, Value: 0 }))
+      )
+      
+      // Get all parameter names
+      const { data, error: fetchError } = await supabase
+        .from('parameters_table')
+        .select('parameter')
+      
+      if (fetchError) throw fetchError
+      
+      if (data) {
+        // Update all parameters to 0 in the database
+        const { error: updateError } = await supabase
+          .from('parameters_table')
+          .update({ value: 0 })
+          .in('parameter', data.map(d => d.parameter))
+        
+        if (updateError) throw updateError
+        
+        setSaveStatus('All parameters reset successfully!')
       }
     } catch (error) {
-      console.error('Error updating fault settings:', error);
-      setSaveStatus('error');
+      console.error('Error resetting parameters:', error)
+      setSaveStatus('Error resetting parameters')
+    } finally {
+      setTimeout(() => setSaveStatus(''), 3000)
     }
-
-    setTimeout(() => setSaveStatus('idle'), 2000);
-  };
+  }
 
   const ProtectionCard = ({ 
     title, 
@@ -671,446 +726,410 @@ export default function Settings() {
     </div>
   )
 
-  return (
-    <div className="min-h-screen bg-gradient-to-br from-gray-900 via-[#111827] to-black text-gray-100">
-      <div className="absolute inset-0">
-        <div className="absolute inset-0 bg-[url('/grid.svg')] opacity-5"></div>
-        <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-transparent to-transparent"></div>
-      </div>
-      
-      <div className="relative">
-        <nav className="border-b border-gray-800/50 bg-gray-900/30 backdrop-blur-xl sticky top-0 z-10">
-          <div className="max-w-6xl mx-auto px-6 py-4">
+  const ProtectionParameter = ({ title, statusParam, valueParam }: { 
+    title: string, 
+    statusParam: string, 
+    valueParam: string 
+  }) => {
+    // Convert UI parameter names to match database parameter names
+    const dbStatusParam = statusParam.toLowerCase()
+    const dbValueParam = valueParam.toLowerCase()
+
+    return (
+      <div className="bg-gray-800/50 p-4 rounded-lg border border-gray-700 backdrop-blur-sm">
+        <h3 className="text-lg font-medium text-white mb-4">{title}</h3>
+        <div className="space-y-4">
             <div className="flex items-center justify-between">
+            <span className="text-gray-300">Status</span>
+            <div className="relative">
               <button
-                onClick={() => router.back()}
-                className="flex items-center gap-2 text-gray-400 hover:text-gray-100 transition-all duration-300 group"
+                onClick={() => handleParameterChange(dbStatusParam, getValue(dbStatusParam) === 1 ? 0 : 1)}
+                className={`w-12 h-6 rounded-full p-1 transition-colors ${
+                  getValue(dbStatusParam) === 1 ? 'bg-blue-600' : 'bg-gray-600'
+                }`}
               >
-                <ArrowLeft size={20} className="group-hover:-translate-x-1 transition-transform duration-300" />
-                <span>Back to Dashboard</span>
-              </button>
-
-              <button
-                onClick={handleLogout}
-                className="flex items-center gap-2 text-gray-400 hover:text-red-400 transition-colors duration-300 group"
-              >
-                <LogOut size={20} className="group-hover:rotate-180 transition-transform duration-300" />
-                <span>Logout</span>
+                <div 
+                  className={`w-4 h-4 rounded-full bg-white transform transition-transform ${
+                    getValue(dbStatusParam) === 1 ? 'translate-x-6' : 'translate-x-0'
+                  }`} 
+                />
               </button>
             </div>
           </div>
-        </nav>
-
-        <main className="max-w-6xl mx-auto px-6 py-12">
-          <div className="flex items-center justify-between mb-12">
-            <h1 className="text-4xl font-bold bg-gradient-to-r from-white to-gray-400 bg-clip-text text-transparent">Settings</h1>
-            <div className="flex items-center gap-2">
-              {saveStatus === 'saving' && (
-                <span className="text-blue-400 text-sm animate-pulse">Saving changes...</span>
-              )}
-              {saveStatus === 'saved' && (
-                <span className="text-green-400 text-sm animate-fadeIn">Changes saved</span>
-              )}
-              {saveStatus === 'error' && (
-                <span className="text-red-400 text-sm animate-fadeIn">Error saving changes</span>
-              )}
-            </div>
-          </div>
-
-          {/* User Profile Section */}
-          <div className="bg-gray-900/30 backdrop-blur-sm rounded-xl border border-gray-800/50 p-8 mb-12 hover:border-gray-700 transition-all duration-300 group">
-            <div className="flex items-center gap-4 mb-8">
-              <div className="bg-gradient-to-br from-blue-500/20 to-blue-600/20 p-3 rounded-lg transition-transform duration-300 group-hover:scale-110">
-                <User size={24} className="text-blue-400" />
-              </div>
+          {valueParam && getValue(dbStatusParam) === 1 && (
               <div>
-                <h2 className="text-2xl font-bold bg-gradient-to-r from-white to-gray-400 bg-clip-text text-transparent">User Profile</h2>
-                <p className="text-gray-400 text-sm">Manage your personal information</p>
-              </div>
-            </div>
-
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
-              <div className="space-y-2">
-                <label className="block text-sm font-medium text-gray-300">
-                  Full Name
-                </label>
-                <div className="relative group">
+              <label className="text-gray-300 block mb-2">Set Value</label>
                   <input
-                    type="text"
-                    value={profile.name}
-                    onChange={(e) => handleProfileChange('name', e.target.value)}
-                    className="w-full px-4 py-2.5 bg-gray-800/50 border border-gray-700/50 rounded-lg 
-                      text-gray-100 focus:outline-none focus:ring-2 focus:ring-blue-500/50 transition-all
-                      group-hover:border-gray-600"
-                    placeholder="Enter your full name"
-                  />
-                  <User size={18} className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-500 transition-colors group-hover:text-gray-400" />
+                type="number"
+                value={getValue(dbValueParam) || 0}
+                onChange={(e) => handleParameterChange(dbValueParam, Number(e.target.value))}
+                className="w-full bg-gray-700 text-white rounded px-3 py-2 border border-gray-600"
+              />
                 </div>
+          )}
               </div>
+                </div>
+    )
+  }
 
-              <div className="space-y-2">
-                <label className="block text-sm font-medium text-gray-300">
-                  Email Address
-                </label>
-                <div className="relative group">
-                  <input
-                    type="email"
-                    value={profile.email}
-                    onChange={(e) => handleProfileChange('email', e.target.value)}
-                    className="w-full px-4 py-2.5 bg-gray-800/50 border border-gray-700/50 rounded-lg 
-                      text-gray-100 focus:outline-none focus:ring-2 focus:ring-blue-500/50 transition-all
-                      group-hover:border-gray-600"
-                    placeholder="Enter your email"
-                  />
-                  <Mail size={18} className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-500 transition-colors group-hover:text-gray-400" />
-                </div>
-              </div>
+  // Helper function to get parameter value
+  const getValue = (parameter: string) => {
+    const param = parameters.find(p => p.Parameter === parameter)
+    console.log('Getting value for:', parameter, 'Found:', param)
+    return param?.Value ?? 0
+  }
 
-              <div className="space-y-2">
-                <label className="block text-sm font-medium text-gray-300">
-                  Company
-                </label>
-                <div className="relative group">
-                  <input
-                    type="text"
-                    value={profile.company}
-                    onChange={(e) => handleProfileChange('company', e.target.value)}
-                    className="w-full px-4 py-2.5 bg-gray-800/50 border border-gray-700/50 rounded-lg 
-                      text-gray-100 focus:outline-none focus:ring-2 focus:ring-blue-500/50 transition-all
-                      group-hover:border-gray-600"
-                    placeholder="Enter your company name"
-                  />
-                  <Building size={18} className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-500 transition-colors group-hover:text-gray-400" />
-                </div>
-              </div>
-
-              <div className="space-y-2">
-                <label className="block text-sm font-medium text-gray-300">
-                  Phone Number
-                </label>
-                <div className="relative group">
-                  <input
-                    type="tel"
-                    value={profile.phone}
-                    onChange={(e) => handleProfileChange('phone', e.target.value)}
-                    className="w-full px-4 py-2.5 bg-gray-800/50 border border-gray-700/50 rounded-lg 
-                      text-gray-100 focus:outline-none focus:ring-2 focus:ring-blue-500/50 transition-all
-                      group-hover:border-gray-600"
-                    placeholder="Enter your phone number"
-                  />
-                  <Phone size={18} className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-500 transition-colors group-hover:text-gray-400" />
-                </div>
-              </div>
-            </div>
+  return (
+    <div className="min-h-screen bg-gradient-to-br from-gray-900 via-gray-800 to-black p-4 md:p-6 lg:p-8">
+      <div className="max-w-7xl mx-auto space-y-8">
+        {/* Back Button and Reset All Button */}
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-4">
+            <button
+              onClick={() => router.push('/dashboard')}
+              className="flex items-center gap-2 px-4 py-2 text-sm text-gray-300 bg-gray-800/50 rounded-lg 
+                border border-gray-700/50 hover:bg-gray-700/50 hover:border-gray-600 transition-all duration-200"
+            >
+              <ArrowLeft className="w-4 h-4" />
+              Back to Dashboard
+            </button>
+            <h1 className="text-2xl md:text-3xl font-bold text-white">Protection Settings</h1>
           </div>
+          <button
+            onClick={handleResetAll}
+            className="flex items-center gap-2 px-4 py-2 text-sm text-red-300 bg-red-900/30 rounded-lg 
+              border border-red-700/50 hover:bg-red-800/50 hover:border-red-600 transition-all duration-200"
+          >
+            Reset All Parameters
+          </button>
+        </div>
 
-          {/* Fault Protection Settings */}
-          <h2 className="text-2xl font-bold bg-gradient-to-r from-white to-gray-400 bg-clip-text text-transparent mb-8">Fault Protection Settings</h2>
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-12">
-            {/* Over Voltage Fault */}
-            <div className="group bg-gray-900/30 backdrop-blur-sm rounded-xl border border-gray-800/50 overflow-hidden transition-all duration-300 hover:border-gray-700 hover:shadow-lg hover:shadow-yellow-500/5">
-              <div className="p-6 border-b border-gray-800/50">
-                <div className="flex items-center gap-4">
-                  <div className="bg-gradient-to-br from-yellow-500/20 to-yellow-600/20 p-3 rounded-lg transition-transform duration-300 group-hover:scale-110">
-                    <Zap size={24} className="text-yellow-400" />
-                  </div>
-                  <div className="flex-1">
-                    <div className="flex items-center justify-between gap-4">
-                      <h3 className="text-xl font-semibold bg-gradient-to-r from-white to-gray-400 bg-clip-text text-transparent">Over-voltage Fault</h3>
-                      <ToggleSwitch
-                        id="over_voltage_fault"
-                        checked={faultSettings.over_voltage_fault_enabled}
-                        onChange={(checked) => handleFaultSettingChange('over_voltage_fault_enabled', checked)}
-                      />
-                    </div>
-                    <p className="text-gray-400 text-sm mt-1">Configure over-voltage protection settings</p>
-                  </div>
-                </div>
-              </div>
-
-              {faultSettings.over_voltage_fault_enabled && (
-                <div className="p-6 bg-gray-900/50 space-y-6 animate-fadeIn">
-                  <div className="space-y-4">
-                    <div>
-                      <label className="block text-sm font-medium text-gray-300 mb-2">Set Voltage (V)</label>
-                      <div className="relative group/input">
-                        <input
-                          type="number"
-                          value={faultSettings.over_voltage_set_value}
-                          onChange={(e) => handleFaultSettingChange('over_voltage_set_value', parseFloat(e.target.value) || 0)}
-                          className="w-full px-4 py-2.5 bg-gray-800/50 border border-gray-700/50 rounded-lg 
-                            text-gray-100 focus:outline-none focus:ring-2 focus:ring-yellow-500/50 transition-all
-                            group-hover/input:border-gray-600"
-                          placeholder="Enter voltage threshold"
-                        />
-                        <span className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-500">V</span>
-                      </div>
-                    </div>
-                    <div>
-                      <label className="block text-sm font-medium text-gray-300 mb-2">Time Characteristic (ms)</label>
-                      <div className="relative group/input">
-                        <input
-                          type="number"
-                          value={faultSettings.over_voltage_time_chara}
-                          onChange={(e) => handleFaultSettingChange('over_voltage_time_chara', parseFloat(e.target.value) || 0)}
-                          className="w-full px-4 py-2.5 bg-gray-800/50 border border-gray-700/50 rounded-lg 
-                            text-gray-100 focus:outline-none focus:ring-2 focus:ring-yellow-500/50 transition-all
-                            group-hover/input:border-gray-600"
-                          placeholder="Enter time characteristic"
-                        />
-                        <span className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-500">ms</span>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              )}
-            </div>
-
-            {/* Over Current Fault */}
-            <div className="group bg-gray-900/30 backdrop-blur-sm rounded-xl border border-gray-800/50 overflow-hidden transition-all duration-300 hover:border-gray-700 hover:shadow-lg hover:shadow-red-500/5">
-              <div className="p-6 border-b border-gray-800/50">
-                <div className="flex items-center gap-4">
-                  <div className="bg-gradient-to-br from-red-500/20 to-red-600/20 p-3 rounded-lg transition-transform duration-300 group-hover:scale-110">
-                    <AlertTriangle size={24} className="text-red-400" />
-                  </div>
-                  <div className="flex-1">
-                    <div className="flex items-center justify-between gap-4">
-                      <h3 className="text-xl font-semibold bg-gradient-to-r from-white to-gray-400 bg-clip-text text-transparent">Over-current Fault</h3>
-                      <ToggleSwitch
-                        id="over_current_fault"
-                        checked={faultSettings.over_current_fault_enabled}
-                        onChange={(checked) => handleFaultSettingChange('over_current_fault_enabled', checked)}
-                      />
-                    </div>
-                    <p className="text-gray-400 text-sm mt-1">Configure over-current protection settings</p>
-                  </div>
-                </div>
-              </div>
-
-              {faultSettings.over_current_fault_enabled && (
-                <div className="p-6 bg-gray-900/50 space-y-6 animate-fadeIn">
-                  <div className="space-y-4">
-                    <div>
-                      <label className="block text-sm font-medium text-gray-300 mb-2">Set Current (A)</label>
-                      <div className="relative group/input">
-                        <input
-                          type="number"
-                          value={faultSettings.over_current_set_value}
-                          onChange={(e) => handleFaultSettingChange('over_current_set_value', parseFloat(e.target.value) || 0)}
-                          className="w-full px-4 py-2.5 bg-gray-800/50 border border-gray-700/50 rounded-lg 
-                            text-gray-100 focus:outline-none focus:ring-2 focus:ring-red-500/50 transition-all
-                            group-hover/input:border-gray-600"
-                          placeholder="Enter current threshold"
-                        />
-                        <span className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-500">A</span>
-                      </div>
-                    </div>
-                    <div>
-                      <label className="block text-sm font-medium text-gray-300 mb-2">Time Characteristic (ms)</label>
-                      <div className="relative group/input">
-                        <input
-                          type="number"
-                          value={faultSettings.over_current_time_chara}
-                          onChange={(e) => handleFaultSettingChange('over_current_time_chara', parseFloat(e.target.value) || 0)}
-                          className="w-full px-4 py-2.5 bg-gray-800/50 border border-gray-700/50 rounded-lg 
-                            text-gray-100 focus:outline-none focus:ring-2 focus:ring-red-500/50 transition-all
-                            group-hover/input:border-gray-600"
-                          placeholder="Enter time characteristic"
-                        />
-                        <span className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-500">ms</span>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              )}
-            </div>
-          </div>
-
-          {/* Protection Settings Section */}
-          <h2 className="text-2xl font-bold mb-6">Protection Settings</h2>
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+        {loading ? (
+          <div className="text-white">Loading settings...</div>
+        ) : (
+          <div className="space-y-8">
             {/* Voltage Protection */}
-            <ProtectionCard
-              title="Phase C Over-voltage"
-              description="Protection against excessive voltage in Phase C"
-              icon={<Zap size={24} className="text-yellow-500" />}
-              statusField="output_phase_c_over_voltage_status"
-              valueField="output_phase_c_over_voltage_set_value"
-              iconBgColor="bg-yellow-500/10"
-              iconColor="text-yellow-500"
-              unit="V"
-            />
+            <section className="space-y-4">
+              <h2 className="text-xl font-semibold text-white">Voltage Protection</h2>
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                {/* Input Over Voltage */}
+                <ProtectionParameter
+                  title="Input Phase A Over Voltage"
+                  statusParam="input_phase_a_over_voltage_status"
+                  valueParam="input_phase_a_over_voltage_set_value"
+                />
+                <ProtectionParameter
+                  title="Input Phase B Over Voltage"
+                  statusParam="input_phase_b_over_voltage_status"
+                  valueParam="input_phase_b_over_voltage_set_value"
+                />
+                <ProtectionParameter
+                  title="Input Phase C Over Voltage"
+                  statusParam="input_phase_c_over_voltage_status"
+                  valueParam="input_phase_c_over_voltage_set_value"
+                />
+                <ProtectionParameter
+                  title="Output Phase A Over Voltage"
+                  statusParam="output_phase_a_over_voltage_status"
+                  valueParam="output_phase_a_over_voltage_set_value"
+                />
+                <ProtectionParameter
+                  title="Output Phase B Over Voltage"
+                  statusParam="output_phase_b_over_voltage_status"
+                  valueParam="output_phase_b_over_voltage_set_value"
+                />
+                <ProtectionParameter
+                  title="Output Phase C Over Voltage"
+                  statusParam="output_phase_c_over_voltage_status"
+                  valueParam="output_phase_c_over_voltage_set_value"
+                />
+                <ProtectionParameter
+                  title="Input DC Over Voltage"
+                  statusParam="input_dc_over_voltage_status"
+                  valueParam="input_dc_over_voltage_set_value"
+                />
+                <ProtectionParameter
+                  title="Output DC Over Voltage"
+                  statusParam="output_dc_over_voltage_status"
+                  valueParam="output_dc_over_voltage_set_value"
+                />
 
-            <ProtectionCard
-              title="Phase A Under-voltage"
-              description="Protection against low voltage in Phase A"
-              icon={<Zap size={24} className="text-blue-500" />}
-              statusField="output_phase_a_under_voltage_status"
-              valueField="output_phase_a_under_voltage_set_value"
-              iconBgColor="bg-blue-500/10"
-              iconColor="text-blue-500"
-              unit="V"
-            />
+                {/* Input Under Voltage */}
+                <ProtectionParameter
+                  title="Input Phase A Under Voltage"
+                  statusParam="input_phase_a_under_voltage_status"
+                  valueParam="input_phase_a_under_voltage_set_value"
+                />
+                <ProtectionParameter
+                  title="Input Phase B Under Voltage"
+                  statusParam="input_phase_b_under_voltage_status"
+                  valueParam="input_phase_b_under_voltage_set_value"
+                />
+                <ProtectionParameter
+                  title="Input Phase C Under Voltage"
+                  statusParam="input_phase_c_under_voltage_status"
+                  valueParam="input_phase_c_under_voltage_set_value"
+                />
+                <ProtectionParameter
+                  title="Output Phase A Under Voltage"
+                  statusParam="output_phase_a_under_voltage_status"
+                  valueParam="output_phase_a_under_voltage_set_value"
+                />
+                <ProtectionParameter
+                  title="Output Phase B Under Voltage"
+                  statusParam="output_phase_b_under_voltage_status"
+                  valueParam="output_phase_b_under_voltage_set_value"
+                />
+                <ProtectionParameter
+                  title="Output Phase C Under Voltage"
+                  statusParam="output_phase_c_under_voltage_status"
+                  valueParam="output_phase_c_under_voltage_set_value"
+                />
+                <ProtectionParameter
+                  title="Input DC Under Voltage"
+                  statusParam="input_dc_under_voltage_status"
+                  valueParam="input_dc_under_voltage_set_value"
+                />
+                <ProtectionParameter
+                  title="Output DC Under Voltage"
+                  statusParam="output_dc_under_voltage_status"
+                  valueParam="output_dc_under_voltage_set_value"
+                />
+                      </div>
+            </section>
 
-            <ProtectionCard
-              title="Phase B Under-voltage"
-              description="Protection against low voltage in Phase B"
-              icon={<Zap size={24} className="text-blue-500" />}
-              statusField="output_phase_b_under_voltage_status"
-              valueField="output_phase_b_under_voltage_set_value"
-              iconBgColor="bg-blue-500/10"
-              iconColor="text-blue-500"
-              unit="V"
-            />
-
-            <ProtectionCard
-              title="Phase C Under-voltage"
-              description="Protection against low voltage in Phase C"
-              icon={<Zap size={24} className="text-blue-500" />}
-              statusField="output_phase_c_under_voltage_status"
-              valueField="output_phase_c_under_voltage_set_value"
-              iconBgColor="bg-blue-500/10"
-              iconColor="text-blue-500"
-              unit="V"
-            />
+            {/* Current Protection */}
+            <section className="space-y-4">
+              <h2 className="text-xl font-semibold text-white">Current Protection</h2>
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                <ProtectionParameter
+                  title="Input Phase A Over Current"
+                  statusParam="input_phase_a_over_current_status"
+                  valueParam="input_phase_a_over_current_set_value"
+                />
+                <ProtectionParameter
+                  title="Input Phase B Over Current"
+                  statusParam="input_phase_b_over_current_status"
+                  valueParam="input_phase_b_over_current_set_value"
+                />
+                <ProtectionParameter
+                  title="Input Phase C Over Current"
+                  statusParam="input_phase_c_over_current_status"
+                  valueParam="input_phase_c_over_current_set_value"
+                />
+                <ProtectionParameter
+                  title="Output Phase A Over Current"
+                  statusParam="output_phase_a_over_current_status"
+                  valueParam="output_phase_a_over_current_set_value"
+                />
+                <ProtectionParameter
+                  title="Output Phase B Over Current"
+                  statusParam="output_phase_b_over_current_status"
+                  valueParam="output_phase_b_over_current_set_value"
+                />
+                <ProtectionParameter
+                  title="Output Phase C Over Current"
+                  statusParam="output_phase_c_over_current_status"
+                  valueParam="output_phase_c_over_current_set_value"
+                />
+                <ProtectionParameter
+                  title="Input DC Over Current"
+                  statusParam="input_dc_over_current_status"
+                  valueParam="input_dc_over_current_set_value"
+                />
+                <ProtectionParameter
+                  title="Output DC Over Current"
+                  statusParam="output_dc_over_current_status"
+                  valueParam="output_dc_over_current_set_value"
+                />
+              </div>
+            </section>
 
             {/* Frequency Protection */}
-            <ProtectionCard
-              title="Over-frequency"
-              description="Protection against high frequency"
-              icon={<Activity size={24} className="text-purple-500" />}
-              statusField="output_over_frequency_status"
-              valueField="output_over_frequency_set_value"
-              iconBgColor="bg-purple-500/10"
-              iconColor="text-purple-500"
-              unit="Hz"
-            />
+            <section className="space-y-4">
+              <h2 className="text-xl font-semibold text-white">Frequency Protection</h2>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <ProtectionParameter
+                  title="Input Over Frequency"
+                  statusParam="input_over_frequency_status"
+                  valueParam="input_over_frequency_set_value"
+                />
+                <ProtectionParameter
+                  title="Output Over Frequency"
+                  statusParam="output_over_frequency_status"
+                  valueParam="output_over_frequency_set_value"
+                />
+                <ProtectionParameter
+                  title="Input Under Frequency"
+                  statusParam="input_under_frequency_status"
+                  valueParam="input_under_frequency_set_value"
+                />
+                <ProtectionParameter
+                  title="Output Under Frequency"
+                  statusParam="output_under_frequency_status"
+                  valueParam="output_under_frequency_set_value"
+                />
+              </div>
+            </section>
 
-            <ProtectionCard
-              title="Under-frequency"
-              description="Protection against low frequency"
-              icon={<Activity size={24} className="text-purple-500" />}
-              statusField="output_under_frequency_status"
-              valueField="output_under_frequency_set_value"
-              iconBgColor="bg-purple-500/10"
-              iconColor="text-purple-500"
-              unit="Hz"
-            />
-
-            {/* DC Protection */}
-            <ProtectionCard
-              title="DC Over-voltage"
-              description="Protection against excessive DC voltage"
-              icon={<Zap size={24} className="text-yellow-500" />}
-              statusField="output_dc_over_voltage_status"
-              valueField="output_dc_over_voltage_set_value"
-              iconBgColor="bg-yellow-500/10"
-              iconColor="text-yellow-500"
-              unit="V"
-            />
-
-            <ProtectionCard
-              title="DC Under-voltage"
-              description="Protection against low DC voltage"
-              icon={<Zap size={24} className="text-blue-500" />}
-              statusField="output_dc_under_voltage_status"
-              valueField="output_dc_under_voltage_set_value"
-              iconBgColor="bg-blue-500/10"
-              iconColor="text-blue-500"
-              unit="V"
-            />
-
-            <ProtectionCard
-              title="DC Over-current"
-              description="Protection against excessive DC current"
-              icon={<AlertTriangle size={24} className="text-red-500" />}
-              statusField="output_dc_over_current_status"
-              valueField="output_dc_over_current_set_value"
-              iconBgColor="bg-red-500/10"
-              iconColor="text-red-500"
-              unit="A"
-            />
-
-            <ProtectionCard
-              title="Over-temperature"
-              description="Protection against excessive temperature"
-              icon={<Thermometer size={24} className="text-orange-500" />}
-              statusField="output_over_temperature_status"
-              valueField="output_over_temperature_set_value"
-              iconBgColor="bg-orange-500/10"
-              iconColor="text-orange-500"
-              unit="°C"
+            {/* Temperature Protection */}
+            <section className="space-y-4">
+              <h2 className="text-xl font-semibold text-white">Temperature Protection</h2>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <ProtectionParameter
+                  title="Input Over Temperature"
+                  statusParam="input_over_temperature_status"
+                  valueParam="input_over_temperature_set_value"
+                />
+                <ProtectionParameter
+                  title="Output Over Temperature"
+                  statusParam="output_over_temperature_status"
+                  valueParam="output_over_temperature_set_value"
             />
           </div>
+            </section>
 
-          {/* Trip Characteristics */}
-          <div className="bg-gray-800/30 backdrop-blur-sm rounded-lg p-8 mt-12 border border-gray-700/50 hover:border-gray-600 transition-all duration-300">
-            <h2 className="text-2xl font-semibold bg-gradient-to-r from-white to-gray-400 bg-clip-text text-transparent mb-6 flex items-center">
-              <span className="w-2 h-2 bg-purple-500 rounded-full mr-2 animate-pulse"></span>
-              Trip Characteristics
-            </h2>
-            <div className="space-y-6">
-              <div className="flex items-center justify-between">
-                <span className="text-gray-300">Instantaneous Trip</span>
-                <ToggleSwitch
-                  id="instantaneous_trip_characteristics_status"
-                  checked={status.instantaneous_trip_characteristics_status === 1}
-                  onChange={(checked) => handleStatusChange('instantaneous_trip_characteristics_status', checked ? 1 : 0)}
-                />
-              </div>
-              <div className="flex items-center justify-between">
-                <span className="text-gray-300">Inverse Time</span>
-                <ToggleSwitch
-                  id="inverse_time_characteristics_status"
-                  checked={status.inverse_time_characteristics_status === 1}
-                  onChange={(checked) => handleStatusChange('inverse_time_characteristics_status', checked ? 1 : 0)}
-                />
-              </div>
-              <div className="flex items-center justify-between">
-                <span className="text-gray-300">Definite Time</span>
-                <ToggleSwitch
-                  id="definite_time_characteristics_status"
-                  checked={status.definite_time_characteristics_status === 1}
-                  onChange={(checked) => handleStatusChange('definite_time_characteristics_status', checked ? 1 : 0)}
-                />
-              </div>
-              <div className="flex items-center justify-between">
-                <span className="text-gray-300">Differential Relay</span>
-                <ToggleSwitch
-                  id="differential_relay_characteristics_status"
-                  checked={status.differential_relay_characteristics_status === 1}
-                  onChange={(checked) => handleStatusChange('differential_relay_characteristics_status', checked ? 1 : 0)}
-                />
-              </div>
-            </div>
-          </div>
+            {/* Relay Characteristics */}
+            <section className="space-y-4">
+              <h2 className="text-xl font-semibold text-white">Relay Characteristics</h2>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div className="bg-gray-800/50 p-4 rounded-lg border border-gray-700 backdrop-blur-sm">
+                  <h3 className="text-lg font-medium text-white mb-4">Instantaneous Trip</h3>
+                  <div className="space-y-4">
+                    <div className="flex items-center justify-between">
+                      <span className="text-gray-300">Enable/Disable (0/1)</span>
+                      <input
+                        type="number"
+                        min="0"
+                        max="1"
+                        value={getValue('Instantaneous_Trip_Characteristics_status')}
+                        onChange={(e) => {
+                          const value = Math.min(Math.max(parseInt(e.target.value) || 0, 0), 1);
+                          handleParameterChange('Instantaneous_Trip_Characteristics_status', value);
+                        }}
+                        className="w-20 bg-gray-700 text-white rounded px-3 py-2 border border-gray-600"
+                      />
+                    </div>
+                  </div>
+                </div>
 
-          {/* Trip and Reset Controls */}
-          <div className="bg-gray-800/30 backdrop-blur-sm rounded-lg p-8 mt-6 border border-gray-700/50 hover:border-gray-600 transition-all duration-300">
-            <h2 className="text-2xl font-semibold bg-gradient-to-r from-white to-gray-400 bg-clip-text text-transparent mb-6 flex items-center">
-              <span className="w-2 h-2 bg-red-500 rounded-full mr-2 animate-pulse"></span>
-              Control Actions
-            </h2>
-            <div className="flex gap-4">
-              <button
-                onClick={() => handleStatusChange('trip_button', 1)}
-                className="flex-1 px-6 py-3 rounded-lg font-medium transition-all duration-300 
-                  bg-gradient-to-r from-red-500/20 to-red-600/20 text-red-400 border border-red-500/30 
-                  hover:bg-red-500/30 hover:scale-105 hover:shadow-lg hover:shadow-red-500/20"
-              >
-                TRIP
-              </button>
-              <button
-                onClick={() => handleStatusChange('reset_button', 1)}
-                className="flex-1 px-6 py-3 rounded-lg font-medium transition-all duration-300 
-                  bg-gradient-to-r from-green-500/20 to-green-600/20 text-green-400 border border-green-500/30 
-                  hover:bg-green-500/30 hover:scale-105 hover:shadow-lg hover:shadow-green-500/20"
-              >
-                RESET
-              </button>
-            </div>
+                <div className="bg-gray-800/50 p-4 rounded-lg border border-gray-700 backdrop-blur-sm">
+                  <h3 className="text-lg font-medium text-white mb-4">Inverse Time</h3>
+                  <div className="space-y-4">
+                    <div className="flex items-center justify-between">
+                      <span className="text-gray-300">Enable/Disable (0/1)</span>
+                      <input
+                        type="number"
+                        min="0"
+                        max="1"
+                        value={getValue('Inverse_Time_Characteristics_status')}
+                        onChange={(e) => {
+                          const value = Math.min(Math.max(parseInt(e.target.value) || 0, 0), 1);
+                          handleParameterChange('Inverse_Time_Characteristics_status', value);
+                        }}
+                        className="w-20 bg-gray-700 text-white rounded px-3 py-2 border border-gray-600"
+                      />
+                    </div>
+                  </div>
+                </div>
+
+                <div className="bg-gray-800/50 p-4 rounded-lg border border-gray-700 backdrop-blur-sm">
+                  <h3 className="text-lg font-medium text-white mb-4">Definite Time</h3>
+                  <div className="space-y-4">
+                    <div className="flex items-center justify-between">
+                      <span className="text-gray-300">Enable/Disable (0/1)</span>
+                      <input
+                        type="number"
+                        min="0"
+                        max="1"
+                        value={getValue('Definite_Time_Characteristics_status')}
+                        onChange={(e) => {
+                          const value = Math.min(Math.max(parseInt(e.target.value) || 0, 0), 1);
+                          handleParameterChange('Definite_Time_Characteristics_status', value);
+                        }}
+                        className="w-20 bg-gray-700 text-white rounded px-3 py-2 border border-gray-600"
+                      />
+                    </div>
+                  </div>
+                </div>
+
+                <div className="bg-gray-800/50 p-4 rounded-lg border border-gray-700 backdrop-blur-sm">
+                  <h3 className="text-lg font-medium text-white mb-4">Differential Relay</h3>
+                  <div className="space-y-4">
+                    <div className="flex items-center justify-between">
+                      <span className="text-gray-300">Enable/Disable (0/1)</span>
+                      <input
+                        type="number"
+                        min="0"
+                        max="1"
+                        value={getValue('Differential_Relay_Characteristics_status')}
+                        onChange={(e) => {
+                          const value = Math.min(Math.max(parseInt(e.target.value) || 0, 0), 1);
+                          handleParameterChange('Differential_Relay_Characteristics_status', value);
+                        }}
+                        className="w-20 bg-gray-700 text-white rounded px-3 py-2 border border-gray-600"
+                      />
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </section>
+
+            {/* Control Buttons */}
+            <section className="space-y-4">
+              <h2 className="text-xl font-semibold text-white">Control</h2>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div className="bg-gray-800/50 p-4 rounded-lg border border-gray-700 backdrop-blur-sm">
+                  <h3 className="text-lg font-medium text-white mb-4">Trip</h3>
+                  <div className="space-y-4">
+                    <div className="flex items-center justify-between">
+                      <span className="text-gray-300">On/Off (1/0)</span>
+                      <input
+                        type="number"
+                        min="0"
+                        max="1"
+                        value={getValue('Trip_button')}
+                        onChange={(e) => {
+                          const value = Math.min(Math.max(parseInt(e.target.value) || 0, 0), 1);
+                          handleParameterChange('Trip_button', value);
+                        }}
+                        className="w-20 bg-gray-700 text-white rounded px-3 py-2 border border-gray-600"
+                      />
+                    </div>
+                  </div>
+                </div>
+
+                <div className="bg-gray-800/50 p-4 rounded-lg border border-gray-700 backdrop-blur-sm">
+                  <h3 className="text-lg font-medium text-white mb-4">Reset</h3>
+                  <div className="space-y-4">
+                    <div className="flex items-center justify-between">
+                      <span className="text-gray-300">On/Off (1/0)</span>
+                      <input
+                        type="number"
+                        min="0"
+                        max="1"
+                        value={getValue('Reset_button')}
+                        onChange={(e) => {
+                          const value = Math.min(Math.max(parseInt(e.target.value) || 0, 0), 1);
+                          handleParameterChange('Reset_button', value);
+                        }}
+                        className="w-20 bg-gray-700 text-white rounded px-3 py-2 border border-gray-600"
+                      />
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </section>
           </div>
-        </main>
+        )}
+
+        {saveStatus && (
+          <div className={`fixed bottom-4 right-4 p-4 rounded-lg ${
+            saveStatus.includes('Error') ? 'bg-red-600' : 'bg-green-600'
+          } text-white shadow-lg`}>
+            {saveStatus}
+          </div>
+        )}
       </div>
     </div>
   )

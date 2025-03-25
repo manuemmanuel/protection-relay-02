@@ -452,14 +452,20 @@ export default function Dashboard() {
                             <button
                               onClick={() => {
                                 const basePath = isInput ? '/dashboard/details/input' : '/dashboard/details/output';
-                                const path = measureType === 'current' 
-                                  ? `${basePath}/current`
-                                  : measureType === 'voltage'
-                                  ? `${basePath}/voltage`
-                                  : measureType === 'dc'
-                                  ? `${basePath}/dc`
-                                  : `${basePath}/ac`;
-                                router.push(path);
+                                let detailPath = `${basePath}/current`; // Default path
+                                
+                                // Handle routing based on configuration and measurement type
+                                if (measureType === 'voltage') {
+                                  detailPath = `${basePath}/voltage`;
+                                } else if (measureType === 'dc') {
+                                  detailPath = `${basePath}/dc`;
+                                } else if (measureType === 'ac') {
+                                  // For single phase AC, route to the same pages as three phase
+                                  detailPath = phases.includes('AC Voltage') 
+                                    ? `${basePath}/voltage`
+                                    : `${basePath}/current`;
+                                }
+                                router.push(detailPath);
                               }}
                               className="px-3 py-1 text-sm bg-blue-500/20 text-blue-400 rounded-lg 
                                 hover:bg-blue-500/30 transition-colors"
@@ -471,16 +477,19 @@ export default function Dashboard() {
                             {phases.map((phase: string) => {
                               let value = 0;
                               if (data) {
-                                const fieldMap: { [key: string]: string } = {
+                                const fieldMap: { [key: string]: keyof RealTimeData } = {
                                   'Phase A': measureType === 'voltage' ? 'A Phase Voltage' : 'A Phase Current',
                                   'Phase B': measureType === 'voltage' ? 'B Phase Voltage' : 'B Phase Current',
                                   'Phase C': measureType === 'voltage' ? 'C Phase Voltage' : 'C Phase Current',
                                   'DC Voltage': 'DC Voltage',
                                   'DC Current': 'DC Current',
-                                  'AC Voltage': 'A Phase Voltage',
-                                  'AC Current': 'A Phase Current'
+                                  'AC Voltage': 'A Phase Voltage', // Map single phase AC to Phase A
+                                  'AC Current': 'A Phase Current'  // Map single phase AC to Phase A
                                 };
-                                value = data[fieldMap[phase] as keyof RealTimeData] as number;
+                                const field = fieldMap[phase];
+                                if (field && data[field] !== undefined) {
+                                  value = data[field] as number;
+                                }
                               }
 
                               return (
@@ -490,7 +499,7 @@ export default function Dashboard() {
                                 >
                                   <span className="text-gray-400">{phase}:</span>
                                   <span className="text-gray-100 font-mono">
-                                    {value.toFixed(2)}
+                                    {value.toFixed(2)} {measureType === 'voltage' ? 'V' : 'A'}
                                   </span>
                                 </div>
                               );

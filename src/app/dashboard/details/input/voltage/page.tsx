@@ -31,10 +31,10 @@ ChartJS.register(
 interface RealTimeData {
   id: string;
   computer_ts: string;
-  a_phase_voltage: number;
-  b_phase_voltage: number;
-  c_phase_voltage: number;
-  frequency: number;
+  "A Phase Voltage": number;
+  "B Phase Voltage": number;
+  "C Phase Voltage": number;
+  "Frequency": number;
 }
 
 interface PhaseData {
@@ -81,10 +81,10 @@ export default function VoltageDetails() {
     try {
       console.log('Attempting to save historical data:', {
         timestamp: data.computer_ts,
-        a_phase_voltage: data.a_phase_voltage,
-        b_phase_voltage: data.b_phase_voltage,
-        c_phase_voltage: data.c_phase_voltage,
-        frequency: data.frequency
+        a_phase_voltage: data["A Phase Voltage"],
+        b_phase_voltage: data["B Phase Voltage"],
+        c_phase_voltage: data["C Phase Voltage"],
+        frequency: data["Frequency"]
       })
 
       // First check if data with this timestamp already exists
@@ -103,10 +103,10 @@ export default function VoltageDetails() {
         .from('historical_voltage')
         .insert({
           timestamp: data.computer_ts,
-          a_phase_voltage: data.a_phase_voltage,
-          b_phase_voltage: data.b_phase_voltage,
-          c_phase_voltage: data.c_phase_voltage,
-          frequency: data.frequency
+          a_phase_voltage: data["A Phase Voltage"],
+          b_phase_voltage: data["B Phase Voltage"],
+          c_phase_voltage: data["C Phase Voltage"],
+          frequency: data["Frequency"]
         })
         .select()
         .single()
@@ -164,8 +164,15 @@ export default function VoltageDetails() {
       setLoading(true)
       try {
         const { data, error } = await supabase
-          .from('real_time_data')
-          .select('*')
+          .from('input_real_time_data')
+          .select(`
+            id,
+            computer_ts,
+            "A Phase Voltage",
+            "B Phase Voltage",
+            "C Phase Voltage",
+            "Frequency"
+          `)
           .order('computer_ts', { ascending: false })
           .limit(100)
 
@@ -185,18 +192,18 @@ export default function VoltageDetails() {
     const updatePhaseData = (latestData: RealTimeData) => {
       setPhaseData({
         'Phase A': {
-          amplitude: latestData.a_phase_voltage,
-          frequency: latestData.frequency,
+          amplitude: latestData["A Phase Voltage"],
+          frequency: latestData["Frequency"],
           phaseShift: 0
         },
         'Phase B': {
-          amplitude: latestData.b_phase_voltage,
-          frequency: latestData.frequency,
+          amplitude: latestData["B Phase Voltage"],
+          frequency: latestData["Frequency"],
           phaseShift: 2 * Math.PI / 3
         },
         'Phase C': {
-          amplitude: latestData.c_phase_voltage,
-          frequency: latestData.frequency,
+          amplitude: latestData["C Phase Voltage"],
+          frequency: latestData["Frequency"],
           phaseShift: 4 * Math.PI / 3
         }
       })
@@ -209,25 +216,23 @@ export default function VoltageDetails() {
           {
             event: '*',
             schema: 'public',
-            table: 'real_time_data'
+            table: 'input_real_time_data'
           },
           async (payload) => {
             if (!isSubscribed) return
             if (payload.eventType === 'INSERT' || payload.eventType === 'UPDATE') {
               const newData = payload.new as RealTimeData
               
-              // Get the latest data from state instead of using realTimeData directly
               setRealTimeData(current => {
                 const lastData = current[0]
                 const threshold = 0.1
 
                 const hasAmplitudeChange = !lastData ||
-                  Math.abs(newData.a_phase_voltage - lastData.a_phase_voltage) > threshold ||
-                  Math.abs(newData.b_phase_voltage - lastData.b_phase_voltage) > threshold ||
-                  Math.abs(newData.c_phase_voltage - lastData.c_phase_voltage) > threshold
+                  Math.abs(newData["A Phase Voltage"] - lastData["A Phase Voltage"]) > threshold ||
+                  Math.abs(newData["B Phase Voltage"] - lastData["B Phase Voltage"]) > threshold ||
+                  Math.abs(newData["C Phase Voltage"] - lastData["C Phase Voltage"]) > threshold
 
                 if (hasAmplitudeChange) {
-                  // Call saveHistoricalData outside of the state update
                   void saveHistoricalData(newData)
                 }
 
@@ -256,8 +261,15 @@ export default function VoltageDetails() {
       if (!isSubscribed) return
       try {
         const { data, error } = await supabase
-          .from('real_time_data')
-          .select('*')
+          .from('input_real_time_data')
+          .select(`
+            id,
+            computer_ts,
+            "A Phase Voltage",
+            "B Phase Voltage",
+            "C Phase Voltage",
+            "Frequency"
+          `)
           .order('computer_ts', { ascending: false })
           .limit(1)
           .single()
@@ -268,12 +280,11 @@ export default function VoltageDetails() {
             const threshold = 0.1
 
             const hasAmplitudeChange = !lastData ||
-              Math.abs(data.a_phase_voltage - lastData.a_phase_voltage) > threshold ||
-              Math.abs(data.b_phase_voltage - lastData.b_phase_voltage) > threshold ||
-              Math.abs(data.c_phase_voltage - lastData.c_phase_voltage) > threshold
+              Math.abs(data["A Phase Voltage"] - lastData["A Phase Voltage"]) > threshold ||
+              Math.abs(data["B Phase Voltage"] - lastData["B Phase Voltage"]) > threshold ||
+              Math.abs(data["C Phase Voltage"] - lastData["C Phase Voltage"]) > threshold
 
             if (hasAmplitudeChange) {
-              // Call saveHistoricalData outside of the state update
               void saveHistoricalData(data)
             }
 
@@ -323,13 +334,13 @@ export default function VoltageDetails() {
     )
     
     const latestData = realTimeData[0]
-    const currentFrequency = userFrequency ?? latestData.frequency
+    const currentFrequency = userFrequency ?? latestData["Frequency"]
     
     // Calculate the maximum amplitude among all phases
     const maxAmplitude = Math.max(
-      Math.abs(latestData.a_phase_voltage),
-      Math.abs(latestData.b_phase_voltage),
-      Math.abs(latestData.c_phase_voltage)
+      Math.abs(latestData["A Phase Voltage"]),
+      Math.abs(latestData["B Phase Voltage"]),
+      Math.abs(latestData["C Phase Voltage"])
     )
     
     // Sort time points to ensure proper rendering
@@ -341,7 +352,7 @@ export default function VoltageDetails() {
         label: 'Phase A',
         data: sortedTimePoints.map(t => ({
           x: t,
-          y: latestData.a_phase_voltage * Math.sin(2 * Math.PI * currentFrequency * (t/1000) - Math.PI/2)
+          y: latestData["A Phase Voltage"] * Math.sin(2 * Math.PI * currentFrequency * (t/1000))
         })),
         borderColor: colors['Phase A'],
         backgroundColor: colors['Phase A'].replace('1)', '0.5)'),
@@ -355,7 +366,7 @@ export default function VoltageDetails() {
         label: 'Phase B',
         data: sortedTimePoints.map(t => ({
           x: t,
-          y: latestData.b_phase_voltage * Math.sin(2 * Math.PI * currentFrequency * (t/1000) + 2 * Math.PI / 3 - Math.PI/2)
+          y: latestData["B Phase Voltage"] * Math.sin(2 * Math.PI * currentFrequency * (t/1000) + 2 * Math.PI / 3)
         })),
         borderColor: colors['Phase B'],
         backgroundColor: colors['Phase B'].replace('1)', '0.5)'),
@@ -369,7 +380,7 @@ export default function VoltageDetails() {
         label: 'Phase C',
         data: sortedTimePoints.map(t => ({
           x: t,
-          y: latestData.c_phase_voltage * Math.sin(2 * Math.PI * currentFrequency * (t/1000) + 4 * Math.PI / 3 - Math.PI/2)
+          y: latestData["C Phase Voltage"] * Math.sin(2 * Math.PI * currentFrequency * (t/1000) + 4 * Math.PI / 3)
         })),
         borderColor: colors['Phase C'],
         backgroundColor: colors['Phase C'].replace('1)', '0.5)'),
@@ -453,8 +464,8 @@ export default function VoltageDetails() {
           text: 'Voltage (V)',
           color: '#9CA3AF'
         },
-        min: -Math.ceil((realTimeData[0]?.a_phase_voltage || 240) * 1.2),
-        max: Math.ceil((realTimeData[0]?.a_phase_voltage || 240) * 1.2),
+        min: -Math.ceil((realTimeData[0]?.["A Phase Voltage"] || 240) * 1.2),
+        max: Math.ceil((realTimeData[0]?.["A Phase Voltage"] || 240) * 1.2),
         grid: { color: '#374151' },
         ticks: { 
           color: '#9CA3AF',
@@ -466,9 +477,9 @@ export default function VoltageDetails() {
     }
   }
 
-  const FrequencyControl = () => {
+  const ScopeControl = () => {
     const latestData = realTimeData[0]
-    const currentFrequency = userFrequency ?? (latestData?.frequency ?? 50)
+    const currentFrequency = userFrequency ?? (latestData?.["Frequency"] ?? 50)
 
     return (
       <div className="bg-gray-900/50 p-3 xs:p-4 sm:p-6 rounded-lg xs:rounded-xl border border-gray-800 
@@ -477,10 +488,10 @@ export default function VoltageDetails() {
           <div className="flex items-center justify-between">
             <div>
               <h3 className="text-sm xs:text-base sm:text-lg font-semibold text-gray-100">
-                Frequency Control
+                Scope Control
               </h3>
               <p className="text-xs sm:text-sm text-gray-400 mt-0.5">
-                Adjust visualization frequency
+                Adjust visualization scope
               </p>
             </div>
             <button
@@ -507,12 +518,12 @@ export default function VoltageDetails() {
             <span className="text-gray-300 font-mono bg-gray-800/80 px-2 py-1 xs:px-3 xs:py-1.5 
               rounded-lg min-w-[60px] xs:min-w-[70px] sm:min-w-[80px] text-center 
               text-xs xs:text-sm sm:text-base">
-              {currentFrequency} Hz
+              {currentFrequency}
             </span>
           </div>
           {userFrequency !== null && (
             <p className="text-xs text-amber-400/80">
-              ⚠️ Frequency manually adjusted. Real-time frequency: {latestData?.frequency.toFixed(2)} Hz
+              ⚠️ Scope manually adjusted. Real-time scope: {latestData?.["Frequency"].toFixed(2)}
             </p>
           )}
         </div>
@@ -567,7 +578,7 @@ export default function VoltageDetails() {
               </div>
             ) : (
               <>
-                <FrequencyControl />
+                <ScopeControl />
                 <div className="bg-gray-900/50 p-2 xs:p-3 sm:p-4 md:p-6 rounded-lg xs:rounded-xl border 
                   border-gray-800 backdrop-blur-sm">
                   <div className="h-[250px] xs:h-[300px] sm:h-[400px] lg:h-[500px]">
@@ -602,10 +613,10 @@ export default function VoltageDetails() {
                           </span>
                         </div>
                         <div className="flex justify-between items-center p-2 xs:p-3 bg-gray-800/40 rounded-lg">
-                          <span className="text-xs xs:text-sm sm:text-base text-gray-400">Frequency</span>
+                          <span className="text-xs xs:text-sm sm:text-base text-gray-400">Scope</span>
                           <span className="text-xs xs:text-sm sm:text-base text-gray-100 font-mono 
                             bg-gray-800/80 px-1.5 xs:px-2 sm:px-3 py-1 xs:py-1.5 rounded-lg">
-                            {userFrequency !== null ? `${userFrequency} Hz*` : `${data.frequency} Hz`}
+                            {userFrequency !== null ? `${userFrequency}` : `${data.frequency}`}
                           </span>
                         </div>
                         <div className="flex justify-between items-center p-2 xs:p-3 bg-gray-800/40 rounded-lg">
@@ -617,7 +628,7 @@ export default function VoltageDetails() {
                         </div>
                         {userFrequency !== null && (
                           <p className="text-xs text-amber-400/80">
-                            *Visualization frequency (Real: {data.frequency} Hz, T: {(1000 / data.frequency).toFixed(2)} ms)
+                            *Visualization scope (Real: {data.frequency}, T: {(1000 / data.frequency).toFixed(2)} ms)
                           </p>
                         )}
                       </div>
@@ -666,7 +677,7 @@ export default function VoltageDetails() {
                           <th className="p-2">Phase A (V)</th>
                           <th className="p-2">Phase B (V)</th>
                           <th className="p-2">Phase C (V)</th>
-                          <th className="p-2">Frequency (Hz)</th>
+                          <th className="p-2">Scope</th>
                         </tr>
                       </thead>
                       <tbody>
