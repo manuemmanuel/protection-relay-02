@@ -109,14 +109,14 @@ interface RealTimeData {
 
 interface OutputRealTimeData extends RealTimeData {} // Same structure as RealTimeData
 
-// Add new interfaces for the panels
-interface RelayStatus {
-  status: 'healthy' | 'fault' | 'tripped';
-  configuration: string;
-  inputStatus: 'healthy' | 'fault';
-  outputStatus: 'healthy' | 'fault';
-  breakerStatus: 'open' | 'closed';
-  faultStatus: boolean;
+// Update the interface to match the table structure
+interface DeviceStatus {
+  timestamp: string;
+  relay_status: string | null;
+  input_status: string | null;
+  output_status: string | null;
+  circuit_breaker_status: string | null;
+  fault_type: string | null;
 }
 
 interface EnergyMetrics {
@@ -137,49 +137,7 @@ export default function Dashboard() {
   const [user, setUser] = useState<User | null>(null)
   const [inputData, setInputData] = useState<RealTimeData | null>(null)
   const [outputData, setOutputData] = useState<OutputRealTimeData | null>(null)
-  const [relayStatus, setRelayStatus] = useState<RelayStatus>({
-    status: 'healthy',
-    configuration: selectedConfig,
-    inputStatus: 'healthy',
-    outputStatus: 'healthy',
-    breakerStatus: 'closed',
-    faultStatus: false
-  });
-
-  const handleTrip = async () => {
-    try {
-      // Update relay status to tripped
-      setRelayStatus(prev => ({
-        ...prev,
-        status: 'tripped',
-        breakerStatus: 'open'
-      }));
-
-      // Here you would typically make an API call to trigger the trip action
-      // For now, we'll just log it
-      console.log('Trip action triggered');
-    } catch (error) {
-      console.error('Error triggering trip:', error);
-    }
-  };
-
-  const handleReset = async () => {
-    try {
-      // Reset relay status to healthy
-      setRelayStatus(prev => ({
-        ...prev,
-        status: 'healthy',
-        breakerStatus: 'closed',
-        faultStatus: false
-      }));
-
-      // Here you would typically make an API call to trigger the reset action
-      // For now, we'll just log it
-      console.log('Reset action triggered');
-    } catch (error) {
-      console.error('Error triggering reset:', error);
-    }
-  };
+  const [deviceStatus, setDeviceStatus] = useState<DeviceStatus | null>(null);
 
   useEffect(() => {
     setMounted(true)
@@ -257,6 +215,56 @@ export default function Dashboard() {
     }
   }, [supabase])
 
+  useEffect(() => {
+    let isSubscribed = true;
+    let statusPollingInterval: NodeJS.Timeout;
+
+    const fetchDeviceStatus = async () => {
+      try {
+        const { data, error } = await supabase
+          .from('device_status')
+          .select('*')
+          .order('timestamp', { ascending: false })
+          .limit(1)
+          .single();
+
+        if (error) throw error;
+        if (data && isSubscribed) {
+          setDeviceStatus(data);
+        }
+      } catch (error) {
+        console.error('Error fetching device status:', error);
+      }
+    };
+
+    // Set up real-time subscription
+    const channel = supabase
+      .channel('device_status_changes')
+      .on('postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'device_status'
+        },
+        (payload) => {
+          if (payload.eventType === 'INSERT' || payload.eventType === 'UPDATE') {
+            setDeviceStatus(payload.new as DeviceStatus);
+          }
+        }
+      )
+      .subscribe();
+
+    // Initial fetch and polling
+    fetchDeviceStatus();
+    statusPollingInterval = setInterval(fetchDeviceStatus, 1000);
+
+    return () => {
+      isSubscribed = false;
+      clearInterval(statusPollingInterval);
+      channel.unsubscribe();
+    };
+  }, [supabase]);
+
   if (!mounted) return null
 
   return (
@@ -282,11 +290,12 @@ export default function Dashboard() {
                 <div className="flex justify-between items-center p-3 bg-gray-800/40 rounded-lg border border-gray-800/50">
                   <span className="text-gray-400">Relay Status:</span>
                   <span className={`px-4 py-1.5 rounded-full text-sm font-medium ${
-                    relayStatus.status === 'healthy' ? 'bg-green-500/20 text-green-400 border border-green-500/30' :
-                    relayStatus.status === 'fault' ? 'bg-red-500/20 text-red-400 border border-red-500/30' :
-                    'bg-yellow-500/20 text-yellow-400 border border-yellow-500/30'
+                    deviceStatus?.relay_status?.toLowerCase() === 'healthy' ? 'bg-green-500/20 text-green-400 border border-green-500/30' :
+                    deviceStatus?.relay_status?.toLowerCase() === 'fault' ? 'bg-red-500/20 text-red-400 border border-red-500/30' :
+                    deviceStatus?.relay_status?.toLowerCase() === 'tripped' ? 'bg-yellow-500/20 text-yellow-400 border border-yellow-500/30' :
+                    'bg-gray-500/20 text-gray-400 border border-gray-500/30'
                   }`}>
-                    {relayStatus.status.toUpperCase()}
+                    {deviceStatus?.relay_status?.toUpperCase() ?? 'UNKNOWN'}
                   </span>
                 </div>
                 <div className="flex justify-between items-center p-3 bg-gray-800/40 rounded-lg border border-gray-800/50">
@@ -296,62 +305,41 @@ export default function Dashboard() {
                 <div className="flex justify-between items-center p-3 bg-gray-800/40 rounded-lg border border-gray-800/50">
                   <span className="text-gray-400">Input Status:</span>
                   <span className={`px-4 py-1.5 rounded-full text-sm font-medium ${
-                    relayStatus.inputStatus === 'healthy' ? 'bg-green-500/20 text-green-400 border border-green-500/30' :
+                    deviceStatus?.input_status?.toLowerCase() === 'healthy' ? 'bg-green-500/20 text-green-400 border border-green-500/30' :
                     'bg-red-500/20 text-red-400 border border-red-500/30'
                   }`}>
-                    {relayStatus.inputStatus.toUpperCase()}
+                    {deviceStatus?.input_status?.toUpperCase() ?? 'UNKNOWN'}
                   </span>
                 </div>
                 <div className="flex justify-between items-center p-3 bg-gray-800/40 rounded-lg border border-gray-800/50">
                   <span className="text-gray-400">Output Status:</span>
                   <span className={`px-4 py-1.5 rounded-full text-sm font-medium ${
-                    relayStatus.outputStatus === 'healthy' ? 'bg-green-500/20 text-green-400 border border-green-500/30' :
+                    deviceStatus?.output_status?.toLowerCase() === 'healthy' ? 'bg-green-500/20 text-green-400 border border-green-500/30' :
                     'bg-red-500/20 text-red-400 border border-red-500/30'
                   }`}>
-                    {relayStatus.outputStatus.toUpperCase()}
+                    {deviceStatus?.output_status?.toUpperCase() ?? 'UNKNOWN'}
                   </span>
                 </div>
                 <div className="flex justify-between items-center p-3 bg-gray-800/40 rounded-lg border border-gray-800/50">
                   <span className="text-gray-400">Circuit Breaker:</span>
                   <span className={`px-4 py-1.5 rounded-full text-sm font-medium ${
-                    relayStatus.breakerStatus === 'closed' ? 'bg-green-500/20 text-green-400 border border-green-500/30' :
+                    deviceStatus?.circuit_breaker_status?.toLowerCase() === 'closed' ? 'bg-green-500/20 text-green-400 border border-green-500/30' :
                     'bg-red-500/20 text-red-400 border border-red-500/30'
                   }`}>
-                    {relayStatus.breakerStatus.toUpperCase()}
+                    {deviceStatus?.circuit_breaker_status?.toUpperCase() ?? 'UNKNOWN'}
                   </span>
                 </div>
                 <div className="flex justify-between items-center p-3 bg-gray-800/40 rounded-lg border border-gray-800/50">
                   <span className="text-gray-400">Fault Status:</span>
                   <span className={`px-4 py-1.5 rounded-full text-sm font-medium ${
-                    relayStatus.faultStatus ? 'bg-red-500/20 text-red-400 border border-red-500/30' :
+                    deviceStatus?.fault_type ? 'bg-red-500/20 text-red-400 border border-red-500/30' :
                     'bg-green-500/20 text-green-400 border border-green-500/30'
                   }`}>
-                    {relayStatus.faultStatus ? 'FAULT DETECTED' : 'NO FAULTS'}
+                    {deviceStatus?.fault_type ? deviceStatus.fault_type.toUpperCase() : 'NO FAULTS'}
                   </span>
                 </div>
-                <div className="flex gap-4 mt-6">
-                  <button
-                    onClick={handleTrip}
-                    disabled={relayStatus.status === 'tripped'}
-                    className={`flex-1 px-4 py-2 rounded-lg font-medium transition-colors ${
-                      relayStatus.status === 'tripped'
-                        ? 'bg-red-500/20 text-red-400 border border-red-500/30 cursor-not-allowed'
-                        : 'bg-red-500/20 text-red-400 border border-red-500/30 hover:bg-red-500/30'
-                    }`}
-                  >
-                    TRIP
-                  </button>
-                  <button
-                    onClick={handleReset}
-                    disabled={relayStatus.status === 'healthy'}
-                    className={`flex-1 px-4 py-2 rounded-lg font-medium transition-colors ${
-                      relayStatus.status === 'healthy'
-                        ? 'bg-green-500/20 text-green-400 border border-green-500/30 cursor-not-allowed'
-                        : 'bg-green-500/20 text-green-400 border border-green-500/30 hover:bg-green-500/30'
-                    }`}
-                  >
-                    RESET
-                  </button>
+                <div className="text-xs text-gray-400 mt-2">
+                  Last updated: {deviceStatus?.timestamp ? new Date(deviceStatus.timestamp).toLocaleString() : 'Never'}
                 </div>
               </div>
             </div>
